@@ -6,7 +6,6 @@ import com.utp.horario.domain.model.ClassSession;
 import com.utp.horario.domain.model.Course;
 import com.utp.horario.domain.model.ScheduleInterval;
 import com.utp.horario.domain.model.StudentProfile;
-import com.utp.horario.domain.model.TaskSyncItem;
 import com.utp.horario.domain.port.out.UtpPortalGatewayPort;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -845,11 +844,6 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
             if (i < parts.length - 1) sb.append(" ");
         }
         return sb.toString();
-    }
-
-    @Override
-    public List<TaskSyncItem> fetchTasks(String token, String sectionId) {
-        return List.of();
     }
 
     @Override
