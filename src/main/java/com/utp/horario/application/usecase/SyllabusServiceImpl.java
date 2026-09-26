@@ -19,6 +19,7 @@ public class SyllabusServiceImpl implements SyllabusServicePort {
     private final SyllabusRepositoryPort syllabusRepositoryPort;
     private final UtpPortalGatewayPort utpPortalGatewayPort;
     private final SyllabusParserEngine syllabusParserEngine;
+    private final com.utp.horario.application.service.export.SyllabusMarkdownExporter syllabusMarkdownExporter;
 
     @Override
     public Syllabus getSyllabusByCourseCode(String courseCode) {
@@ -71,5 +72,21 @@ public class SyllabusServiceImpl implements SyllabusServicePort {
         log.info("[SyllabusServiceImpl] Extrayendo texto crudo de PDF para target='{}' (courseCode='{}')", target, courseCode);
         String pdfText = utpPortalGatewayPort.fetchSyllabusPdfText(token != null ? token : "", target);
         return pdfText != null ? pdfText : "";
+    }
+
+    @Override
+    public String getSyllabusAsMarkdown(String courseCode, String sectionId, String pdfUrl, String token, boolean preferRaw) {
+        if (preferRaw) {
+            String rawText = fetchRawSyllabusText(courseCode, sectionId, pdfUrl, token);
+            return syllabusMarkdownExporter.rawTextToMarkdown(rawText, courseCode);
+        }
+
+        Syllabus syllabus = getSyllabus(courseCode, sectionId, pdfUrl, token);
+        if (syllabus != null && syllabus.getWeeklySchedule() != null && !syllabus.getWeeklySchedule().isEmpty()) {
+            return syllabusMarkdownExporter.exportToMarkdown(syllabus);
+        }
+
+        String rawText = fetchRawSyllabusText(courseCode, sectionId, pdfUrl, token);
+        return syllabusMarkdownExporter.rawTextToMarkdown(rawText, courseCode);
     }
 }

@@ -11,4 +11,5 @@ public interface SyllabusServicePort {
     Syllabus parseAndSaveSyllabusText(String courseCode, String syllabusText);
     Syllabus saveSyllabus(Syllabus syllabus);
     String fetchRawSyllabusText(String courseCode, String sectionId, String pdfUrl, String token);
+    String getSyllabusAsMarkdown(String courseCode, String sectionId, String pdfUrl, String token, boolean preferRaw);
 }

@@ -250,7 +250,15 @@ Simulador matemático y proyector de notas rectoras.
 Sincroniza y parsea automáticamente el sílabo en PDF del curso mediante el motor determinista de expresiones regulares y máquinas de estado.
 
 #### `GET /syllabus/{courseCode}`
-Retorna las competencias, fórmula oficial, unidades de aprendizaje y cronograma detallado de las 18 semanas de clases.
+Retorna las competencias, fórmula oficial, unidades de aprendizaje y cronograma detallado de las 18 semanas de clases en JSON (`ApiResponse<Syllabus>`).
+
+#### `GET /syllabus/{courseCode}/markdown` & `GET /syllabus/markdown`
+> **Especial para LLMs y Prompt Engineering:** Devuelve el sílabo completo formateado en **Markdown estándar** (`Content-Type: text/markdown; charset=utf-8`) con encabezados `#`, listas y tablas de ponderaciones/cronograma.
+- **Ventaja para LLMs:** Los backends pueden inyectar directamente el cuerpo de esta respuesta en el contexto de un modelo (OpenAI GPT-4o, Claude 3.5 Sonnet, Gemini 1.5 Pro, DeepSeek) para extraer esquemas ad-hoc o resolver ambigüedades sin lidiar con parsing manual de PDFs o JSON anidado.
+- **Query Params:**
+  - `sectionId`: ID opcional de la sección en Class.
+  - `pdfUrl`: URL directa en S3 del PDF del sílabo.
+  - `preferRaw`: Si es `true`, fuerza la conversión de texto crudo sin estructuración previa (`default: false`).
 
 ---
 
