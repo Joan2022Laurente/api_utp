@@ -6,4 +6,5 @@ public interface ScheduleServicePort {
     ScheduleInterval getStudentSchedule(String studentId, String period);
     ScheduleInterval getStudentSchedule(String studentId, String period, String token);
     ScheduleInterval syncScheduleFromUtp(String token, String period);
+    String exportScheduleToIcs(String studentId, String period, String token);
 }

@@ -5,5 +5,6 @@ import com.utp.horario.domain.model.StudentProfile;
 public interface AuthenticateStudentUseCase {
     StudentProfile authenticateWithCredentials(String username, String password);
     StudentProfile authenticateWithToken(String token);
+    StudentProfile refreshToken(String refreshToken);
     StudentProfile getProfile(String studentId);
 }

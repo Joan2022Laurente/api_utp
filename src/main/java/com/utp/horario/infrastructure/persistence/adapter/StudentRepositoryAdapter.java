@@ -29,25 +29,25 @@ public class StudentRepositoryAdapter implements StudentRepositoryPort {
                 .build();
 
         StudentEntity saved = repository.save(entity);
-        return toDomain(saved, student.getToken(), student.getEnrolledCourseCodes());
+        return toDomain(saved, student.getToken(), student.getRefreshToken(), student.getExpiresIn(), student.getEnrolledCourseCodes());
     }
 
     @Override
     public Optional<StudentProfile> findById(String id) {
-        return repository.findById(id).map(e -> toDomain(e, null, List.of()));
+        return repository.findById(id).map(e -> toDomain(e, null, null, null, List.of()));
     }
 
     @Override
     public Optional<StudentProfile> findByStudentCode(String studentCode) {
-        return repository.findByStudentCode(studentCode).map(e -> toDomain(e, null, List.of()));
+        return repository.findByStudentCode(studentCode).map(e -> toDomain(e, null, null, null, List.of()));
     }
 
     @Override
     public Optional<StudentProfile> findByEmail(String email) {
-        return repository.findByEmail(email).map(e -> toDomain(e, null, List.of()));
+        return repository.findByEmail(email).map(e -> toDomain(e, null, null, null, List.of()));
     }
 
-    private StudentProfile toDomain(StudentEntity entity, String token, List<String> courses) {
+    private StudentProfile toDomain(StudentEntity entity, String token, String refreshToken, Integer expiresIn, List<String> courses) {
         return StudentProfile.builder()
                 .id(entity.getId())
                 .studentCode(entity.getStudentCode())
@@ -57,6 +57,8 @@ public class StudentRepositoryAdapter implements StudentRepositoryPort {
                 .campus(entity.getCampus())
                 .currentCycle(entity.getCurrentCycle())
                 .token(token)
+                .refreshToken(refreshToken)
+                .expiresIn(expiresIn)
                 .enrolledCourseCodes(courses)
                 .build();
     }

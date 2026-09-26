@@ -14,8 +14,13 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.tags.Tag;
+
 import java.util.List;
 
+@Tag(name = "Sílabos Oficiales", description = "Extracción, procesamiento posicional y persistencia de sílabos oficiales rectores UTP")
 @RestController
 @RequestMapping("/syllabus")
 @RequiredArgsConstructor
@@ -23,11 +28,16 @@ public class SyllabusController {
 
     private final SyllabusServicePort syllabusServicePort;
 
+    @Operation(summary = "Obtener sílabo estructurado por código de curso", description = "Descarga o recupera de BD el sílabo rector con desglose semanal, fórmulas y unidades.")
     @GetMapping("/{courseCode}")
     public ResponseEntity<ApiResponse<Syllabus>> getSyllabus(
+            @Parameter(description = "Código del curso (ej. 100000ST61)")
             @PathVariable String courseCode,
+            @Parameter(description = "ID de la sección en Class (opcional)")
             @RequestParam(required = false) String sectionId,
+            @Parameter(description = "URL directa del PDF en S3 (opcional)")
             @RequestParam(required = false) String pdfUrl,
+            @Parameter(description = "Token Bearer SSO de UTP")
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         String token = authHeader != null && authHeader.startsWith("Bearer ") ? authHeader.substring(7) : authHeader;
         Syllabus syllabus = syllabusServicePort.getSyllabus(courseCode, sectionId, pdfUrl, token);

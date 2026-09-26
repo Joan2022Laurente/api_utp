@@ -9,7 +9,15 @@ target/
 *.iml
 *.ipr
 .vscode/
-.classpath
-.project
+*.classpath
+*.project
 .settings/
 .DS_Store
+
+### Sensitive Data & Laboratory Scripts ###
+laboratorio/
+*.log
+*.har
+.env
+.env.*
+*.dump

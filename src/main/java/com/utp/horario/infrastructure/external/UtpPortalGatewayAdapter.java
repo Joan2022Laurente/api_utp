@@ -2,10 +2,15 @@ package com.utp.horario.infrastructure.external;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.utp.horario.domain.model.AcademicActivity;
 import com.utp.horario.domain.model.ClassSession;
 import com.utp.horario.domain.model.Course;
+import com.utp.horario.domain.model.CourseSummaryData;
+import com.utp.horario.domain.model.RubricCriterion;
+import com.utp.horario.domain.model.RubricLevel;
 import com.utp.horario.domain.model.ScheduleInterval;
 import com.utp.horario.domain.model.StudentProfile;
+import com.utp.horario.domain.model.TaskSpecification;
 import com.utp.horario.domain.port.out.UtpPortalGatewayPort;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -37,7 +42,8 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
     private final Map<String, String> buildingCache = new ConcurrentHashMap<>();
-    private final Map<String, String> courseToSectionMap = new ConcurrentHashMap<>();
+    private final Map<String, String> studentPaoUserMap = new ConcurrentHashMap<>();
+    private static final Pattern EVAL_PATTERN = Pattern.compile("(?i)(PC\\d*|AP\\d*|EC\\d*|TI\\d*|EP|EF|EXFN|EXPA|PROY|AVANCE|PORTAFOLIO|PARTICIPACI[OÓ]N|EXAMEN)");
 
     public UtpPortalGatewayAdapter() {
         this.httpClient = HttpClient.newBuilder()
@@ -45,6 +51,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
         this.objectMapper = new ObjectMapper();
+        this.studentPaoUserMap.put("u23307609", "4e535263-79a0-5890-ae33-72a7aa0629ab");
     }
 
     public static class ClassroomLocation {
@@ -69,7 +76,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
     }
 
     private String extractUserIdFromToken(String token) {
-        if (token == null || !token.contains(".")) return "4e535263-79a0-5890-ae33-72a7aa0629ab";
+        if (token == null || !token.contains(".")) return "";
         try {
             String[] parts = token.split("\\.");
             if (parts.length >= 2) {
@@ -78,9 +85,17 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 if (payload.hasNonNull("paoUserId")) return payload.path("paoUserId").asText();
                 if (payload.hasNonNull("userId")) return payload.path("userId").asText();
                 if (payload.hasNonNull("user_id")) return payload.path("user_id").asText();
+
+                String studentCode = payload.hasNonNull("preferred_username") 
+                        ? payload.path("preferred_username").asText().toLowerCase() 
+                        : (payload.hasNonNull("username") ? payload.path("username").asText().toLowerCase() : "");
+                if (!studentCode.isBlank() && studentPaoUserMap.containsKey(studentCode)) {
+                    return studentPaoUserMap.get(studentCode);
+                }
+                if (payload.hasNonNull("sub")) return payload.path("sub").asText();
             }
         } catch (Exception ignored) {}
-        return "4e535263-79a0-5890-ae33-72a7aa0629ab";
+        return "";
     }
 
     private String extractStudentCodeFromToken(String token) {
@@ -99,18 +114,19 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
     }
 
     private String extractTenantIdFromToken(String token) {
-        if (token == null || !token.contains(".")) return "a5f469d2-3c0e-5c68-8d32-5265923a8e40";
-        try {
-            String[] parts = token.split("\\.");
-            if (parts.length >= 2) {
-                byte[] decoded = Base64.getUrlDecoder().decode(parts[1]);
-                JsonNode payload = objectMapper.readTree(decoded);
-                if (payload.hasNonNull("tenantId")) return payload.path("tenantId").asText();
-                if (payload.hasNonNull("tenant_id")) return payload.path("tenant_id").asText();
-                if (payload.hasNonNull("tenant")) return payload.path("tenant").asText();
-                if (payload.hasNonNull("x-tenant-id")) return payload.path("x-tenant-id").asText();
-            }
-        } catch (Exception ignored) {}
+        if (token != null && token.contains(".")) {
+            try {
+                String[] parts = token.split("\\.");
+                if (parts.length >= 2) {
+                    byte[] decoded = Base64.getUrlDecoder().decode(parts[1]);
+                    JsonNode payload = objectMapper.readTree(decoded);
+                    if (payload.hasNonNull("tenantId")) return payload.path("tenantId").asText();
+                    if (payload.hasNonNull("tenant_id")) return payload.path("tenant_id").asText();
+                    if (payload.hasNonNull("tenant")) return payload.path("tenant").asText();
+                    if (payload.hasNonNull("x-tenant-id")) return payload.path("x-tenant-id").asText();
+                }
+            } catch (Exception ignored) {}
+        }
         return "a5f469d2-3c0e-5c68-8d32-5265923a8e40";
     }
 
@@ -142,70 +158,15 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
             if (response.statusCode() == 200) {
                 JsonNode root = objectMapper.readTree(response.body());
                 String accessToken = root.path("access_token").asText();
+                String refreshToken = root.hasNonNull("refresh_token") ? root.path("refresh_token").asText() : null;
+                int expiresIn = root.hasNonNull("expires_in") ? root.path("expires_in").asInt(1800) : 1800;
 
-                String studentName = cleanUsername.toUpperCase();
-                String studentCode = cleanUsername.toUpperCase();
-                String studentEmail = cleanUsername + "@utp.edu.pe";
-                String studentUserId = "";
-
-                if (accessToken.contains(".")) {
-                    String[] parts = accessToken.split("\\.");
-                    if (parts.length >= 2) {
-                        byte[] decoded = Base64.getUrlDecoder().decode(parts[1]);
-                        JsonNode payload = objectMapper.readTree(decoded);
-                        if (payload.hasNonNull("name")) studentName = payload.path("name").asText();
-                        if (payload.hasNonNull("email")) studentEmail = payload.path("email").asText();
-                        if (payload.hasNonNull("preferred_username")) studentCode = payload.path("preferred_username").asText().toUpperCase();
-                        if (payload.hasNonNull("userId")) {
-                            studentUserId = payload.path("userId").asText();
-                        } else if (payload.hasNonNull("user_id")) {
-                            studentUserId = payload.path("user_id").asText();
-                        } else if (payload.hasNonNull("paoUserId")) {
-                            studentUserId = payload.path("paoUserId").asText();
-                        } else if (payload.hasNonNull("sub")) {
-                            studentUserId = payload.path("sub").asText();
-                        }
-                    }
-                }
-
-                String studentCareer = "";
-                String studentCampus = "";
-                int studentCycle = 1;
-                if (accessToken.contains(".")) {
-                    try {
-                        String[] parts = accessToken.split("\\.");
-                        if (parts.length >= 2) {
-                            byte[] decoded = Base64.getUrlDecoder().decode(parts[1]);
-                            JsonNode payload = objectMapper.readTree(decoded);
-                            if (payload.hasNonNull("career")) studentCareer = payload.path("career").asText();
-                            else if (payload.hasNonNull("carrera")) studentCareer = payload.path("carrera").asText();
-                            
-                            if (payload.hasNonNull("campus")) studentCampus = payload.path("campus").asText();
-                            else if (payload.hasNonNull("campusDesc")) studentCampus = payload.path("campusDesc").asText();
-                            else if (payload.hasNonNull("sede")) studentCampus = payload.path("sede").asText();
-
-                            if (payload.hasNonNull("cycle")) studentCycle = payload.path("cycle").asInt(1);
-                            else if (payload.hasNonNull("ciclo")) studentCycle = payload.path("ciclo").asInt(1);
-                        }
-                    } catch (Exception ignored) {}
-                }
-
-                if (studentUserId.isBlank()) {
-                    studentUserId = studentCode;
-                }
-
-                log.info("[UTP SSO Auth] Autenticación exitosa en vivo para alumno: {} ({}) - Campus: '{}'", studentCode, studentName, studentCampus);
-                return StudentProfile.builder()
-                        .id(studentUserId)
-                        .studentCode(studentCode)
-                        .fullName(studentName)
-                        .email(studentEmail)
-                        .career(studentCareer)
-                        .campus(studentCampus)
-                        .currentCycle(studentCycle)
-                        .token(accessToken)
-                        .enrolledCourseCodes(List.of())
-                        .build();
+                StudentProfile base = parseProfileFromTokens(accessToken, refreshToken, expiresIn, cleanUsername);
+                // El JWT pao-web NO incluye career/campus/cycle — enriquecer desde Portal GraphQL
+                StudentProfile profile = enrichProfileFromPortal(base, accessToken);
+                log.info("[UTP SSO Auth] Autenticación exitosa: {} | campus='{}' | carrera='{}' | ciclo={}",
+                        profile.getStudentCode(), profile.getCampus(), profile.getCareer(), profile.getCurrentCycle());
+                return profile;
             } else {
                 log.warn("[UTP SSO Auth] Falló autenticación en sso.utp.edu.pe, status: {}, body: {}", response.statusCode(), response.body());
                 throw new RuntimeException("Credenciales UTP inválidas o servicio temporalmente no disponible.");
@@ -214,6 +175,202 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
             log.error("[UTP SSO Auth] Error conectando con servidor SSO UTP: {}", e.getMessage());
             throw new RuntimeException("Error en autenticación UTP: " + e.getMessage());
         }
+    }
+
+    @Override
+    public StudentProfile refreshToken(String refreshToken) {
+        if (refreshToken == null || refreshToken.isBlank()) {
+            throw new IllegalArgumentException("Refresh token inválido o vacío");
+        }
+
+        try {
+            String formParams = "client_id=" + URLEncoder.encode("pao-web", StandardCharsets.UTF_8)
+                    + "&grant_type=" + URLEncoder.encode("refresh_token", StandardCharsets.UTF_8)
+                    + "&refresh_token=" + URLEncoder.encode(refreshToken.trim(), StandardCharsets.UTF_8);
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create("https://sso.utp.edu.pe/auth/realms/Xpedition/protocol/openid-connect/token"))
+                    .timeout(Duration.ofSeconds(15))
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                    .header("Accept", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(formParams))
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() == 200) {
+                JsonNode root = objectMapper.readTree(response.body());
+                String accessToken = root.path("access_token").asText();
+                String newRefreshToken = root.hasNonNull("refresh_token") ? root.path("refresh_token").asText() : refreshToken;
+                int expiresIn = root.hasNonNull("expires_in") ? root.path("expires_in").asInt(1800) : 1800;
+
+                StudentProfile profile = parseProfileFromTokens(accessToken, newRefreshToken, expiresIn, "");
+                log.info("[UTP SSO Refresh] Token renovado exitosamente para alumno: {}", profile.getStudentCode());
+                return profile;
+            } else {
+                log.warn("[UTP SSO Refresh] Falló renovación en sso.utp.edu.pe, status: {}, body: {}", response.statusCode(), response.body());
+                throw new RuntimeException("Refresh token expirado o inválido en Keycloak UTP.");
+            }
+        } catch (Exception e) {
+            log.error("[UTP SSO Refresh] Error conectando con servidor SSO UTP: {}", e.getMessage());
+            throw new RuntimeException("Error renovando sesión UTP: " + e.getMessage());
+        }
+    }
+
+    private StudentProfile parseProfileFromTokens(String accessToken, String refreshToken, int expiresIn, String defaultCode) {
+        String studentName = defaultCode.toUpperCase();
+        String studentCode = defaultCode.toUpperCase();
+        String studentEmail = defaultCode.isBlank() ? "" : defaultCode.toLowerCase() + "@utp.edu.pe";
+        String studentUserId = "";
+        String studentCareer = "";
+        String studentCampus = "";
+        int studentCycle = 1;
+
+        if (accessToken != null && accessToken.contains(".")) {
+            try {
+                String[] parts = accessToken.split("\\.");
+                if (parts.length >= 2) {
+                    byte[] decoded = Base64.getUrlDecoder().decode(parts[1]);
+                    JsonNode payload = objectMapper.readTree(decoded);
+                    if (payload.hasNonNull("name")) studentName = payload.path("name").asText();
+                    if (payload.hasNonNull("email")) studentEmail = payload.path("email").asText();
+                    if (payload.hasNonNull("preferred_username")) {
+                        studentCode = payload.path("preferred_username").asText().toUpperCase();
+                        if (studentEmail.isBlank()) studentEmail = studentCode.toLowerCase() + "@utp.edu.pe";
+                    }
+                    if (payload.hasNonNull("userId")) {
+                        studentUserId = payload.path("userId").asText();
+                    } else if (payload.hasNonNull("user_id")) {
+                        studentUserId = payload.path("user_id").asText();
+                    } else if (payload.hasNonNull("paoUserId")) {
+                        studentUserId = payload.path("paoUserId").asText();
+                    } else if (payload.hasNonNull("sub")) {
+                        studentUserId = payload.path("sub").asText();
+                    }
+
+                    if (payload.hasNonNull("career")) studentCareer = payload.path("career").asText();
+                    else if (payload.hasNonNull("carrera")) studentCareer = payload.path("carrera").asText();
+
+                    if (payload.hasNonNull("campus")) studentCampus = payload.path("campus").asText();
+                    else if (payload.hasNonNull("campusDesc")) studentCampus = payload.path("campusDesc").asText();
+                    else if (payload.hasNonNull("sede")) studentCampus = payload.path("sede").asText();
+
+                    if (payload.hasNonNull("cycle")) studentCycle = payload.path("cycle").asInt(1);
+                    else if (payload.hasNonNull("ciclo")) studentCycle = payload.path("ciclo").asInt(1);
+                }
+            } catch (Exception ignored) {}
+        }
+
+        if (studentUserId.isBlank()) {
+            studentUserId = !studentCode.isBlank() ? studentCode : "usr-student";
+        }
+
+        return StudentProfile.builder()
+                .id(studentUserId)
+                .studentCode(studentCode)
+                .fullName(studentName)
+                .email(studentEmail)
+                .career(studentCareer)
+                .campus(studentCampus)
+                .currentCycle(studentCycle)
+                .token(accessToken)
+                .refreshToken(refreshToken)
+                .expiresIn(expiresIn)
+                .enrolledCourseCodes(List.of())
+                .build();
+    }
+
+    /**
+     * Enriquece el perfil base (extraído del JWT) con career, campus y currentCycle
+     * obtenidos desde el Portal GraphQL del estudiante UTP.
+     * Llamadas: getProfile (academic.progDesc, campusDesc) + GetCourseSummary (relativeCycle).
+     */
+    private StudentProfile enrichProfileFromPortal(StudentProfile base, String accessToken) {
+        String career = base.getCareer();
+        String campus = base.getCampus();
+        int cycle = base.getCurrentCycle() != null ? base.getCurrentCycle() : 1;
+        String studentCode = base.getStudentCode() != null ? base.getStudentCode().toLowerCase() : "";
+
+        String portalUrl = "https://api-portal.utpxpedition.com/graphql";
+        Map<String, String> commonHeaders = Map.of(
+                "applicationid", "APP00002",
+                "authorization", "Bearer " + accessToken,
+                "content-type", "application/json",
+                "isreservation", "false",
+                "user-id", studentCode,
+                "user-role", "student"
+        );
+
+        // 1. getProfile → academic.progDesc (carrera legible) + campusDesc
+        try {
+            String profileQuery = "{\"operationName\":\"getProfile\",\"variables\":{}," +
+                    "\"query\":\"query getProfile { student { academic { campusDesc progDesc } } }\"}";
+
+            HttpRequest.Builder profileReqBuilder = HttpRequest.newBuilder()
+                    .uri(URI.create(portalUrl))
+                    .timeout(Duration.ofSeconds(10))
+                    .POST(HttpRequest.BodyPublishers.ofString(profileQuery));
+            commonHeaders.forEach(profileReqBuilder::header);
+            HttpResponse<String> profileResp = httpClient.send(profileReqBuilder.build(), HttpResponse.BodyHandlers.ofString());
+
+            if (profileResp.statusCode() == 200) {
+                JsonNode academic = objectMapper.readTree(profileResp.body())
+                        .path("data").path("student").path("academic");
+                if (!academic.isMissingNode()) {
+                    String progDesc = academic.path("progDesc").asText("").trim();
+                    String campusDesc = academic.path("campusDesc").asText("").trim();
+                    if (!progDesc.isBlank()) career = progDesc;
+                    if (!campusDesc.isBlank()) campus = campusDesc;
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[UTP Portal Enrich] No se pudo obtener getProfile: {}", e.getMessage());
+        }
+
+        // 2. GetCourseSummary → summary.relativeCycle (ciclo real) + summary.campus (fallback)
+        try {
+            String summaryQuery = "{\"operationName\":\"GetCourseSummary\",\"variables\":{\"periodId\":\"2263\"}," +
+                    "\"query\":\"query GetCourseSummary($periodId: String!) { getCourseSummary(periodId: $periodId) { summary { campus relativeCycle } } }\"}";
+
+            HttpRequest.Builder summaryReqBuilder = HttpRequest.newBuilder()
+                    .uri(URI.create(portalUrl))
+                    .timeout(Duration.ofSeconds(10))
+                    .POST(HttpRequest.BodyPublishers.ofString(summaryQuery));
+            commonHeaders.forEach(summaryReqBuilder::header);
+            HttpResponse<String> summaryResp = httpClient.send(summaryReqBuilder.build(), HttpResponse.BodyHandlers.ofString());
+
+            if (summaryResp.statusCode() == 200) {
+                JsonNode summary = objectMapper.readTree(summaryResp.body())
+                        .path("data").path("getCourseSummary").path("summary");
+                if (!summary.isMissingNode()) {
+                    String relativeCycleRaw = summary.path("relativeCycle").asText("").trim();
+                    if (!relativeCycleRaw.isBlank()) {
+                        try { cycle = Integer.parseInt(relativeCycleRaw.replaceAll("\\D", "")); } catch (NumberFormatException ignored) {}
+                    }
+                    if (campus.isBlank()) {
+                        String campusFallback = summary.path("campus").asText("").trim();
+                        if (!campusFallback.isBlank()) campus = campusFallback;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[UTP Portal Enrich] No se pudo obtener GetCourseSummary: {}", e.getMessage());
+        }
+
+        return StudentProfile.builder()
+                .id(base.getId())
+                .studentCode(base.getStudentCode())
+                .fullName(base.getFullName())
+                .email(base.getEmail())
+                .career(career)
+                .campus(campus)
+                .currentCycle(cycle)
+                .token(base.getToken())
+                .refreshToken(base.getRefreshToken())
+                .expiresIn(base.getExpiresIn())
+                .enrolledCourseCodes(base.getEnrolledCourseCodes())
+                .build();
     }
 
     @Override
@@ -395,13 +552,8 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                                         }
                                     }
 
-                                    registerCourseRef(cleanCourseName, sectionCode, courseUuid, sectionUuid, null);
-                                    registerCourseRef(courseNameRaw, sectionCode, courseUuid, sectionUuid, null);
-
-                                    if (!sectionCode.isBlank()) {
-                                        putSectionInMap(cleanCourseName, sectionCode);
-                                        putSectionInMap(courseNameRaw, sectionCode);
-                                    }
+                                    registerCourseRef(studentCode, cleanCourseName, sectionCode, courseUuid, sectionUuid, null);
+                                    registerCourseRef(studentCode, courseNameRaw, sectionCode, courseUuid, sectionUuid, null);
 
                                     long startEpoch = cls.path("start").asLong();
                                     long endEpoch = cls.path("end").asLong();
@@ -572,10 +724,13 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         }
     }
 
-    private final Map<String, CourseRef> courseRefMap = new ConcurrentHashMap<>();
+    private final Map<String, Map<String, CourseRef>> userCourseRefMap = new ConcurrentHashMap<>();
 
-    private void registerCourseRef(String name, String numericSection, String courseUuid, String sectionUuid, String syllabusUrl) {
+    private void registerCourseRef(String studentCode, String name, String numericSection, String courseUuid, String sectionUuid, String syllabusUrl) {
         if (name == null || name.isBlank()) return;
+        String userKey = (studentCode != null && !studentCode.isBlank()) ? studentCode.toLowerCase() : "shared";
+        Map<String, CourseRef> courseRefMap = userCourseRefMap.computeIfAbsent(userKey, k -> new ConcurrentHashMap<>());
+
         CourseRef ref = new CourseRef(name, numericSection, courseUuid, sectionUuid, syllabusUrl);
         String raw = name.trim().toUpperCase();
         String norm = normalizeSearchKey(raw);
@@ -583,8 +738,6 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         courseRefMap.put(norm, ref);
         if (numericSection != null && !numericSection.isBlank() && numericSection.matches("^\\d+$")) {
             courseRefMap.put(numericSection, ref);
-            courseToSectionMap.put(raw, numericSection);
-            courseToSectionMap.put(norm, numericSection);
         }
         if (sectionUuid != null && !sectionUuid.isBlank()) {
             courseRefMap.put(sectionUuid.toLowerCase(), ref);
@@ -594,8 +747,12 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         }
     }
 
-    private CourseRef findCourseRef(String courseCodeOrName) {
+    private CourseRef findCourseRef(String studentCode, String courseCodeOrName) {
         if (courseCodeOrName == null || courseCodeOrName.isBlank()) return null;
+        String userKey = (studentCode != null && !studentCode.isBlank()) ? studentCode.toLowerCase() : "shared";
+        Map<String, CourseRef> courseRefMap = userCourseRefMap.get(userKey);
+        if (courseRefMap == null || courseRefMap.isEmpty()) return null;
+
         String raw = courseCodeOrName.trim().toUpperCase();
         CourseRef ref = courseRefMap.get(raw);
         if (ref != null) return ref;
@@ -665,29 +822,18 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                             numericSection = secMeta;
                         }
 
-                        registerCourseRef(pt.cleanTitle, numericSection, courseUuid, sectionUuid, syllabusUrl);
-                        registerCourseRef(rawTitle, numericSection, courseUuid, sectionUuid, syllabusUrl);
-                        if (!courseId.isBlank()) registerCourseRef(courseId, numericSection, courseUuid, sectionUuid, syllabusUrl);
+                        String studentCode = extractStudentCodeFromToken(token);
+                        registerCourseRef(studentCode, pt.cleanTitle, numericSection, courseUuid, sectionUuid, syllabusUrl);
+                        registerCourseRef(studentCode, rawTitle, numericSection, courseUuid, sectionUuid, syllabusUrl);
+                        if (!courseId.isBlank()) registerCourseRef(studentCode, courseId, numericSection, courseUuid, sectionUuid, syllabusUrl);
                     }
                 }
             }
 
-            log.info("[UTP PAO Gateway] Mapeadas {} referencias de asignaturas en memoria para descarga de sílabos", courseRefMap.size());
+            log.info("[UTP PAO Gateway] Mapeadas referencias de asignaturas en memoria para alumno");
         } catch (Exception e) {
             log.warn("[UTP PAO Gateway] No se pudieron sincronizar secciones desde PAO: {}", e.getMessage());
         }
-    }
-
-    private void putSectionInMap(String key, String sectionId) {
-        if (key == null || key.isBlank() || sectionId == null || sectionId.isBlank()) return;
-        if (!sectionId.matches("^\\d+$")) return; // Solo permitir códigos de sección numéricos oficiales UTP (ej. 45104, 54262, 56357)
-
-        String raw = key.trim().toUpperCase();
-        courseToSectionMap.put(raw, sectionId);
-
-        // Clave normalizada sin acentos ni signos
-        String normalized = normalizeSearchKey(raw);
-        courseToSectionMap.put(normalized, sectionId);
     }
 
     private String normalizeSearchKey(String str) {
@@ -732,15 +878,9 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 String sectionUuid = sectionId.matches("^[0-9a-fA-F-]{36}$") ? sectionId : "";
                 String finalSection = !parsed.sectionCode.isBlank() ? parsed.sectionCode : (sectionId.matches("^\\d+$") ? sectionId : "");
 
-                registerCourseRef(parsed.cleanTitle, finalSection, courseUuid, sectionUuid, syllabusUrl);
-                registerCourseRef(rawTitle, finalSection, courseUuid, sectionUuid, syllabusUrl);
-                if (!courseId.isBlank()) registerCourseRef(courseId, finalSection, courseUuid, sectionUuid, syllabusUrl);
-
-                if (!finalSection.isBlank()) {
-                    putSectionInMap(parsed.cleanTitle, finalSection);
-                    putSectionInMap(rawTitle, finalSection);
-                    if (!courseId.isBlank()) putSectionInMap(courseId, finalSection);
-                }
+                registerCourseRef(null, parsed.cleanTitle, finalSection, courseUuid, sectionUuid, syllabusUrl);
+                registerCourseRef(null, rawTitle, finalSection, courseUuid, sectionUuid, syllabusUrl);
+                if (!courseId.isBlank()) registerCourseRef(null, courseId, finalSection, courseUuid, sectionUuid, syllabusUrl);
 
                 LocalDateTime startAt = LocalDateTime.parse(startAtStr.replace(" ", "T"));
                 LocalDateTime finishAt = LocalDateTime.parse(finishAtStr.replace(" ", "T"));
@@ -859,11 +999,12 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 String userId = extractUserIdFromToken(token);
                 String tenantId = extractTenantIdFromToken(token);
 
-                CourseRef ref = findCourseRef(pdfUrl);
+                String studentCode = extractStudentCodeFromToken(token);
+                CourseRef ref = findCourseRef(studentCode, pdfUrl);
                 if (ref == null || (ref.syllabusUrl.isBlank() && ref.numericSection.isBlank() && ref.courseUuid.isBlank())) {
                     if (token != null && !token.isBlank()) {
                         populateCourseSectionsFromPao(token);
-                        ref = findCourseRef(pdfUrl);
+                        ref = findCourseRef(studentCode, pdfUrl);
                     }
                 }
 
@@ -943,4 +1084,399 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
 
         return "";
     }
+
+    @Override
+    public TaskSpecification fetchTaskSpecification(String sectionId, String activityId, String token) {
+        String effectiveToken = (token != null && token.startsWith("Bearer ")) ? token.substring(7).trim() : token;
+        String userId = extractUserIdFromToken(effectiveToken);
+        String tenantId = extractTenantIdFromToken(effectiveToken);
+
+        String url = "https://api-pao.utpxpedition.com/course/student/sections/" + sectionId + "/homeworks/" + activityId + "/resume";
+        log.info("[UtpPortalGatewayAdapter] Consultando especificación de tarea en: {}", url);
+
+        try {
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(15))
+                    .header("accept", "*/*")
+                    .header("authorization", "Bearer " + effectiveToken)
+                    .header("user-id", userId)
+                    .header("user-role", "STUDENT")
+                    .header("x-tenant-id", tenantId)
+                    .header("transaction-id", java.util.UUID.randomUUID().toString())
+                    .header("origin", "https://class.utp.edu.pe")
+                    .header("referer", "https://class.utp.edu.pe/")
+                    .header("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                    .GET()
+                    .build();
+
+            HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() == 200) {
+                JsonNode root = objectMapper.readTree(resp.body());
+                JsonNode data = root.path("data");
+
+                String rawContent = data.path("content").asText("");
+                String rawDeliverables = data.path("deliverables").asText("");
+                String markdownDesc = convertHtmlToMarkdown(rawContent);
+                String markdownDeliverables = convertHtmlToMarkdown(rawDeliverables);
+
+                List<String> submissionTypes = new ArrayList<>();
+                String combinedText = (rawContent + " " + rawDeliverables).toLowerCase();
+                if (combinedText.contains("video") || combinedText.contains("youtube") || combinedText.contains("enlace") || combinedText.contains("url")) {
+                    submissionTypes.add("online_url");
+                }
+                if (combinedText.contains("pdf") || combinedText.contains("archivo") || combinedText.contains("sube tu") || combinedText.contains("documento")) {
+                    submissionTypes.add("online_upload");
+                }
+                if (submissionTypes.isEmpty()) {
+                    submissionTypes.add("online_upload");
+                }
+
+                List<RubricCriterion> rubricCriterions = new ArrayList<>();
+                String rubricName = null;
+                Double rubricScore = null;
+
+                if (data.hasNonNull("rubric") && data.path("rubric").isObject()) {
+                    JsonNode rNode = data.path("rubric");
+                    rubricName = rNode.path("name").asText(null);
+                    rubricScore = rNode.hasNonNull("score") ? rNode.path("score").asDouble() : null;
+
+                    if (rNode.has("criterions") && rNode.path("criterions").isArray()) {
+                        for (JsonNode cNode : rNode.path("criterions")) {
+                            List<RubricLevel> levels = new ArrayList<>();
+                            if (cNode.has("performanceRatings") && cNode.path("performanceRatings").isArray()) {
+                                for (JsonNode prNode : cNode.path("performanceRatings")) {
+                                    levels.add(RubricLevel.builder()
+                                            .id(prNode.path("id").asText(null))
+                                            .name(prNode.path("name").asText(""))
+                                            .score(prNode.path("score").asDouble(0.0))
+                                            .description(prNode.path("description").asText(""))
+                                            .order(prNode.path("order").asInt(0))
+                                            .build());
+                                }
+                            }
+
+                            String desc = cNode.path("description").asText("").trim();
+                            if (desc.isEmpty() && !levels.isEmpty()) {
+                                desc = levels.get(0).getDescription();
+                            }
+
+                            rubricCriterions.add(RubricCriterion.builder()
+                                    .id(cNode.path("id").asText(null))
+                                    .name(cNode.path("name").asText("Criterio general"))
+                                    .score(cNode.path("score").asDouble(0.0))
+                                    .description(desc)
+                                    .order(cNode.path("order").asInt(0))
+                                    .performanceRatings(levels)
+                                    .build());
+                        }
+                    }
+                }
+
+                Integer attempts = data.hasNonNull("attempts") ? data.path("attempts").asInt() : 1;
+
+                return TaskSpecification.builder()
+                        .id(data.path("id").asText(activityId))
+                        .title(data.path("title").asText("Asignación"))
+                        .descriptionMarkdown(markdownDesc)
+                        .deliverablesMarkdown(markdownDeliverables)
+                        .maxAttempts(attempts)
+                        .submissionTypes(submissionTypes)
+                        .availableFrom(data.path("availableFrom").asText(null))
+                        .availableUntil(data.path("availableUntil").asText(null))
+                        .dueAt(data.path("availableUntil").asText(null))
+                        .unlockAt(data.path("availableFrom").asText(null))
+                        .lockAt(data.path("availableUntil").asText(null))
+                        .evaluationSystem(data.path("evaluationSystem").asText(null))
+                        .isGroup(data.path("isGroup").asBoolean(false))
+                        .homeworkStatus(data.path("homeworkStatus").asText("PENDING"))
+                        .evaluationTopScore(data.path("evaluationTopScore").asDouble(20.0))
+                        .rubricName(rubricName)
+                        .rubricScore(rubricScore)
+                        .gradingRubric(rubricCriterions)
+                        .build();
+            } else {
+                log.warn("[UtpPortalGatewayAdapter] Error {} al obtener tarea {}: {}", resp.statusCode(), activityId, resp.body());
+            }
+        } catch (Exception e) {
+            log.error("[UtpPortalGatewayAdapter] Excepción al consultar homework resume {}: {}", activityId, e.getMessage());
+        }
+
+        return TaskSpecification.builder()
+                .id(activityId)
+                .title("Asignación no disponible")
+                .descriptionMarkdown("")
+                .gradingRubric(new ArrayList<>())
+                .submissionTypes(List.of("online_upload"))
+                .build();
+    }
+
+    @Override
+    public List<AcademicActivity> fetchCalendarActivities(String dateToQuery, String intervalMode, String token) {
+        String effectiveToken = (token != null && token.startsWith("Bearer ")) ? token.substring(7).trim() : token;
+        String userId = extractUserIdFromToken(effectiveToken);
+        String tenantId = extractTenantIdFromToken(effectiveToken);
+
+        String effectiveDate = (dateToQuery != null && !dateToQuery.isBlank()) ? dateToQuery : "2026-09-21+00:00:00";
+        String effectiveMode = (intervalMode != null && !intervalMode.isBlank()) ? intervalMode : "period";
+
+        String url = "https://api-pao.utpxpedition.com/course/student/calendar/activities?userId=" + userId
+                + "&dateToQuery=" + effectiveDate + "&intervalMode=" + effectiveMode;
+
+        log.info("[UtpPortalGatewayAdapter] Consultando calendario de actividades en: {}", url);
+        List<AcademicActivity> activities = new ArrayList<>();
+
+        try {
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(15))
+                    .header("accept", "*/*")
+                    .header("authorization", "Bearer " + effectiveToken)
+                    .header("user-id", userId)
+                    .header("user-role", "STUDENT")
+                    .header("x-tenant-id", tenantId)
+                    .header("transaction-id", java.util.UUID.randomUUID().toString())
+                    .header("origin", "https://class.utp.edu.pe")
+                    .header("referer", "https://class.utp.edu.pe/")
+                    .header("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                    .GET()
+                    .build();
+
+            HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() == 200) {
+                JsonNode root = objectMapper.readTree(resp.body());
+                JsonNode eventsNode = root.path("data").path("current_interval").path("events");
+                if (eventsNode.isArray()) {
+                    for (JsonNode ev : eventsNode) {
+                        JsonNode meta = ev.path("metadata");
+                        String title = ev.path("title").asText("");
+                        String type = meta.path("activityType").asText(ev.path("type").asText("ACTIVITY"));
+                        String finishAt = ev.path("finishAt").asText(null);
+                        String evalSystem = meta.path("evaluationSystem").asText(null);
+                        boolean isQualified = meta.path("isQualified").asBoolean(false);
+
+                        String category = calculateCategory(title, type, evalSystem, isQualified);
+                        UrgencyInfo urgencyInfo = calculateUrgency(finishAt);
+
+                        activities.add(AcademicActivity.builder()
+                                .id(ev.path("id").asText(null))
+                                .title(title)
+                                .activityType(type)
+                                .weekNumber(meta.path("weekNumber").asInt(0))
+                                .startAt(ev.path("startAt").asText(null))
+                                .finishAt(finishAt)
+                                .courseName(meta.path("courseName").asText(null))
+                                .courseId(meta.path("courseId").asText(null))
+                                .sectionId(meta.path("sectionId").asText(null))
+                                .contentId(meta.path("contentId").asText(null))
+                                .activityId(meta.path("activityId").asText(null))
+                                .evaluationSystem(evalSystem)
+                                .studentStatus(meta.path("studentStatus").asText("PENDING"))
+                                .isQualified(isQualified)
+                                .classificationCategory(category)
+                                .urgency(urgencyInfo.urgency())
+                                .daysRemaining(urgencyInfo.daysRemaining())
+                                .build());
+                    }
+                }
+            } else {
+                log.warn("[UtpPortalGatewayAdapter] Error {} consultando calendar activities: {}", resp.statusCode(), resp.body());
+            }
+        } catch (Exception e) {
+            log.error("[UtpPortalGatewayAdapter] Excepción en fetchCalendarActivities: {}", e.getMessage());
+        }
+
+        return activities;
+    }
+
+    public record UrgencyInfo(String urgency, Long daysRemaining) {}
+
+    private String calculateCategory(String title, String type, String evalSystem, boolean isQualified) {
+        if ((evalSystem != null && !evalSystem.isBlank()) || isQualified || (title != null && EVAL_PATTERN.matcher(title).find())) {
+            return "WEIGHTED_EVALUATION";
+        }
+        if (type != null) {
+            String upper = type.toUpperCase();
+            if (upper.contains("FORUM")) return "PARTICIPATION_FORUM";
+            if (upper.contains("HOMEWORK") || upper.contains("TASK")) return "PRACTICE_HOMEWORK";
+            if (upper.contains("EXAM")) return "EXAM";
+        }
+        return "GENERAL_ACTIVITY";
+    }
+
+    private UrgencyInfo calculateUrgency(String finishAtStr) {
+        if (finishAtStr == null || finishAtStr.isBlank()) {
+            return new UrgencyInfo("UNKNOWN", null);
+        }
+        try {
+            LocalDateTime finish = LocalDateTime.parse(finishAtStr.trim(), java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+            LocalDateTime now = LocalDateTime.now();
+            long days = Duration.between(now, finish).toDays();
+            if (finish.isBefore(now)) {
+                return new UrgencyInfo("OVERDUE", days);
+            }
+            if (finish.toLocalDate().isEqual(now.toLocalDate())) {
+                return new UrgencyInfo("DUE_TODAY", 0L);
+            }
+            if (finish.isBefore(now.plusDays(7))) {
+                return new UrgencyInfo("DUE_THIS_WEEK", Math.max(0, days));
+            }
+            return new UrgencyInfo("UPCOMING", days);
+        } catch (Exception e) {
+            return new UrgencyInfo("UNKNOWN", null);
+        }
+    }
+
+    @Override
+    public CourseSummaryData fetchCourseSummary(String periodId, String token) {
+        String effectiveToken = (token != null && token.startsWith("Bearer ")) ? token.substring(7).trim() : token;
+        String studentCode = extractStudentCodeFromToken(effectiveToken);
+        if (studentCode == null || studentCode.isBlank()) {
+            throw new IllegalArgumentException("Token de autenticación no contiene código de estudiante válido");
+        }
+        String effectivePeriod = (periodId != null && !periodId.isBlank()) ? periodId : "2263";
+
+        String url = "https://api-portal.utpxpedition.com/graphql";
+        log.info("[UtpPortalGatewayAdapter] Consultando GetCourseSummary en Portal GraphQL para periodo: {}", effectivePeriod);
+
+        Map<String, Object> bodyObj = new HashMap<>();
+        bodyObj.put("operationName", "GetCourseSummary");
+        bodyObj.put("variables", Map.of("periodId", effectivePeriod));
+        bodyObj.put("query", "query GetCourseSummary($periodId: String!) {\n" +
+                "  getCourseSummary(periodId: $periodId) {\n" +
+                "    summary {\n" +
+                "      campus\n" +
+                "      enrolledCourses\n" +
+                "      average\n" +
+                "      relativeCycle\n" +
+                "      creditCount\n" +
+                "      meritOrder\n" +
+                "      weeklyHours\n" +
+                "      meritBelong\n" +
+                "    }\n" +
+                "    courses {\n" +
+                "      courseId\n" +
+                "      title\n" +
+                "      catalogNumber\n" +
+                "      section\n" +
+                "      credits\n" +
+                "      formula\n" +
+                "      teacher\n" +
+                "      average\n" +
+                "      evaluations {\n" +
+                "        name\n" +
+                "        shortName\n" +
+                "        value\n" +
+                "      }\n" +
+                "    }\n" +
+                "  }\n" +
+                "}\n");
+
+        List<CourseSummaryData.CourseGradeItem> courses = new ArrayList<>();
+        CourseSummaryData.PeriodSummary periodSummary = null;
+
+        try {
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(15))
+                    .header("accept", "*/*")
+                    .header("content-type", "application/json")
+                    .header("authorization", "Bearer " + effectiveToken)
+                    .header("applicationid", "APP00002")
+                    .header("isreservation", "false")
+                    .header("user-id", studentCode)
+                    .header("user-role", "student")
+                    .header("origin", "https://portal.utp.edu.pe")
+                    .header("referer", "https://portal.utp.edu.pe/")
+                    .header("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                    .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(bodyObj)))
+                    .build();
+
+            HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() == 200) {
+                JsonNode root = objectMapper.readTree(resp.body());
+                JsonNode summaryNode = root.path("data").path("getCourseSummary").path("summary");
+                if (!summaryNode.isMissingNode() && !summaryNode.isNull()) {
+                    periodSummary = CourseSummaryData.PeriodSummary.builder()
+                            .campus(summaryNode.path("campus").asText(null))
+                            .enrolledCourses(summaryNode.path("enrolledCourses").asText(null))
+                            .average(summaryNode.path("average").asText(null))
+                            .relativeCycle(summaryNode.path("relativeCycle").asText(null))
+                            .creditCount(summaryNode.path("creditCount").asText(null))
+                            .meritOrder(summaryNode.path("meritOrder").asText(null))
+                            .weeklyHours(summaryNode.path("weeklyHours").asText(null))
+                            .meritBelong(summaryNode.path("meritBelong").asText(null))
+                            .build();
+                }
+
+                JsonNode coursesNode = root.path("data").path("getCourseSummary").path("courses");
+                if (coursesNode.isArray()) {
+                    for (JsonNode cNode : coursesNode) {
+                        List<CourseSummaryData.EvaluationGrade> evGrades = new ArrayList<>();
+                        if (cNode.has("evaluations") && cNode.path("evaluations").isArray()) {
+                            for (JsonNode ev : cNode.path("evaluations")) {
+                                String val = ev.path("value").asText("");
+                                boolean isGraded = false;
+                                try {
+                                    isGraded = Double.parseDouble(val) > 1.0;
+                                } catch (Exception ignored) {}
+
+                                evGrades.add(CourseSummaryData.EvaluationGrade.builder()
+                                        .name(ev.path("name").asText(""))
+                                        .shortName(ev.path("shortName").asText(""))
+                                        .value(val)
+                                        .isGraded(isGraded)
+                                        .build());
+                            }
+                        }
+
+                        courses.add(CourseSummaryData.CourseGradeItem.builder()
+                                .courseId(cNode.path("courseId").asText(""))
+                                .courseCode(cNode.path("catalogNumber").asText(""))
+                                .courseName(cNode.path("title").asText(""))
+                                .section(cNode.path("section").asText(""))
+                                .credits(cNode.path("credits").asText(""))
+                                .formula(cNode.path("formula").asText(""))
+                                .teacher(cNode.path("teacher").asText(""))
+                                .average(cNode.path("average").asText(""))
+                                .evaluations(evGrades)
+                                .build());
+                    }
+                }
+            } else {
+                log.warn("[UtpPortalGatewayAdapter] Error {} en GetCourseSummary: {}", resp.statusCode(), resp.body());
+            }
+        } catch (Exception e) {
+            log.error("[UtpPortalGatewayAdapter] Excepción en fetchCourseSummary: {}", e.getMessage());
+        }
+
+        return CourseSummaryData.builder()
+                .periodId(effectivePeriod)
+                .summary(periodSummary)
+                .courses(courses)
+                .build();
+    }
+
+    private String convertHtmlToMarkdown(String html) {
+        if (html == null || html.isBlank()) return "";
+        return html
+                .replaceAll("(?i)<h[1-6][^>]*>(.*?)</h[1-6]>", "\n### $1\n")
+                .replaceAll("(?i)<li[^>]*>(.*?)</li>", "- $1\n")
+                .replaceAll("(?i)<p[^>]*>", "\n")
+                .replaceAll("(?i)</p>", "\n")
+                .replaceAll("(?i)<br\\s*/?>", "\n")
+                .replaceAll("(?i)<strong[^>]*>(.*?)</strong>", "**$1**")
+                .replaceAll("(?i)<b[^>]*>(.*?)</b>", "**$1**")
+                .replaceAll("(?i)<em[^>]*>(.*?)</em>", "*$1*")
+                .replaceAll("(?i)<i[^>]*>(.*?)</i>", "*$1*")
+                .replaceAll("&nbsp;", " ")
+                .replaceAll("&amp;", "&")
+                .replaceAll("&lt;", "<")
+                .replaceAll("&gt;", ">")
+                .replaceAll("&quot;", "\"")
+                .replaceAll("<[^>]+>", "")
+                .replaceAll("\n{3,}", "\n\n")
+                .trim();
+    }
 }
+

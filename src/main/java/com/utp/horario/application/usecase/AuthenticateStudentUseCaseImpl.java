@@ -58,13 +58,24 @@ public class AuthenticateStudentUseCaseImpl implements AuthenticateStudentUseCas
                             .token(token)
                             .enrolledCourseCodes(List.of())
                             .build();
-                    return studentRepositoryPort.save(profile);
+                    return studentRepositoryPort.findByStudentCode(studentCode)
+                            .map(existing -> {
+                                existing.setToken(token);
+                                return studentRepositoryPort.save(existing);
+                            })
+                            .orElseGet(() -> studentRepositoryPort.save(profile));
                 }
             } catch (Exception e) {
                 // fall through
             }
         }
         throw new IllegalArgumentException("Token de autenticación UTP inválido o expirado");
+    }
+
+    @Override
+    public StudentProfile refreshToken(String refreshToken) {
+        StudentProfile profile = utpPortalGatewayPort.refreshToken(refreshToken);
+        return studentRepositoryPort.save(profile);
     }
 
     @Override

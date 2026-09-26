@@ -13,6 +13,7 @@ public class ScheduleServiceImpl implements ScheduleServicePort {
 
     private final ScheduleRepositoryPort scheduleRepositoryPort;
     private final UtpPortalGatewayPort utpPortalGatewayPort;
+    private final com.utp.horario.application.service.export.IcsCalendarExporter icsCalendarExporter;
 
     @Override
     public ScheduleInterval getStudentSchedule(String studentId, String period) {
@@ -33,5 +34,11 @@ public class ScheduleServiceImpl implements ScheduleServicePort {
     public ScheduleInterval syncScheduleFromUtp(String token, String period) {
         ScheduleInterval interval = utpPortalGatewayPort.fetchSchedule(token, period);
         return scheduleRepositoryPort.save("current-student", interval);
+    }
+
+    @Override
+    public String exportScheduleToIcs(String studentId, String period, String token) {
+        ScheduleInterval interval = getStudentSchedule(studentId, period, token);
+        return icsCalendarExporter.exportSchedule(interval);
     }
 }
