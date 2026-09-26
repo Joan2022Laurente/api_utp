@@ -139,4 +139,45 @@ class AuthControllerTest {
                 .andExpect(jsonPath("$.data.token").value("new.jwt.token"))
                 .andExpect(jsonPath("$.data.refreshToken").value("new.refresh.token"));
     }
+
+    @Test
+    void getProfileById_whenSameUser_returns200Ok() throws Exception {
+        StudentProfile mockProfile = StudentProfile.builder()
+                .id("usr-123")
+                .studentCode("U23307609")
+                .fullName("JUAN PEREZ")
+                .token("mocked.jwt.token")
+                .build();
+
+        when(authenticateStudentUseCase.authenticateWithToken("mocked.jwt.token"))
+                .thenReturn(mockProfile);
+        when(authenticateStudentUseCase.getProfile("usr-123"))
+                .thenReturn(mockProfile);
+
+        mockMvc.perform(get("/auth/profile/usr-123")
+                        .header("Authorization", "Bearer mocked.jwt.token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.studentCode").value("U23307609"));
+    }
+
+    @Test
+    void getProfileById_whenDifferentUser_returns403Forbidden() throws Exception {
+        StudentProfile mockCaller = StudentProfile.builder()
+                .id("usr-caller-123")
+                .studentCode("U23307609")
+                .fullName("ALUMNO ATACANTE")
+                .token("mocked.jwt.token")
+                .build();
+
+        when(authenticateStudentUseCase.authenticateWithToken("mocked.jwt.token"))
+                .thenReturn(mockCaller);
+
+        // Intenta consultar a la víctima "usr-victim-999"
+        mockMvc.perform(get("/auth/profile/usr-victim-999")
+                        .header("Authorization", "Bearer mocked.jwt.token"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error").value("Acceso no autorizado: no tienes permisos para consultar el perfil de otro estudiante."));
+    }
 }
