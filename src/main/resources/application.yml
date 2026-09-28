@@ -23,8 +23,25 @@ spring:
       ddl-auto: update
     show-sql: false
 
+supabase:
+  enabled: ${SUPABASE_ENABLED:true}
+  url: ${SUPABASE_URL:https://hvunobsbasdksiajmfjf.supabase.co}
+  service-role-key: ${SUPABASE_SERVICE_ROLE_KEY:}
+  anon-key: ${SUPABASE_ANON_KEY:}
+  table: ${SUPABASE_SYLLABI_TABLE:official_syllabi}
+
+ai:
+  openrouter:
+    enabled: ${OPENROUTER_ENABLED:true}
+    api-url: ${OPENROUTER_API_URL:https://openrouter.ai/api/v1}
+    primary-model: ${OPENROUTER_PRIMARY_MODEL:qwen/qwen3.8-27b:free}
+    fallback-models:
+      - google/gemma-4-31b-it:free
+      - nvidia/nemotron-3.5-lightning:free
+      - liquid/lfm-2.5-2.6b:free
+      - google/gemma-4-26b-a4b-it:free
+
 app:
   jwt:
     secret: 404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970
     expiration-ms: 86400000 # 24 horas
-
