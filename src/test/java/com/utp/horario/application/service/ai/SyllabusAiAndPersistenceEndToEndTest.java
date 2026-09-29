@@ -45,10 +45,11 @@ class SyllabusAiAndPersistenceEndToEndTest {
         supabaseProperties.initFallbackKeys();
         supabaseClient = new SupabaseSyllabusClient(supabaseProperties, objectMapper);
 
-        // 2. OpenRouter Fleet
+        // 2. OpenRouter Fleet with Dynamic Model Selector
         openRouterProperties = new OpenRouterProperties();
         openRouterProperties.initFleetKeys();
-        openRouterFleetService = new OpenRouterFleetService(openRouterProperties, objectMapper);
+        OpenRouterModelSelector modelSelector = new OpenRouterModelSelector(openRouterProperties, objectMapper);
+        openRouterFleetService = new OpenRouterFleetService(openRouterProperties, modelSelector, objectMapper);
 
         // 3. Mocks for secondary dependencies
         springDataRepoMock = Mockito.mock(SpringDataSyllabusRepository.class);

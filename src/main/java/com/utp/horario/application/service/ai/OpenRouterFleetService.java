@@ -20,9 +20,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 @Slf4j
 @Service
@@ -30,12 +29,13 @@ import java.util.regex.Pattern;
 public class OpenRouterFleetService {
 
     private final OpenRouterProperties properties;
+    private final OpenRouterModelSelector modelSelector;
     private final ObjectMapper objectMapper;
 
     private final AtomicInteger currentKeyIndex = new AtomicInteger(0);
 
     private final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(12))
+            .connectTimeout(Duration.ofSeconds(8))
             .build();
 
     private static final String SYSTEM_PROMPT = """
@@ -43,12 +43,12 @@ public class OpenRouterFleetService {
             Given the raw text of a university syllabus (UTP Perú), extract the complete academic structure into strict, clean JSON.
             Return ONLY a valid JSON object matching this schema:
             {
-              "courseCode": "100000SI68",
-              "courseName": "LENGUAJES DE PROGRAMACIÓN",
-              "credits": 2,
+              "courseCode": "100000ST99",
+              "courseName": "NOMBRE DEL CURSO",
+              "credits": 3,
               "modality": "Presencial",
-              "weeklyHours": 2,
-              "formula": "(25%)PC1 + (25%)PC2 + (10%)PA + (40%)PROY",
+              "weeklyHours": 4,
+              "formula": "(20%)PC1 + (20%)PC2 + (20%)PC3 + (40%)PROY",
               "learningGoal": "Al finalizar el curso...",
               "evaluations": [
                 {
@@ -56,7 +56,7 @@ public class OpenRouterFleetService {
                   "type": "PC1",
                   "description": "Práctica Calificada 1",
                   "week": 4,
-                  "weightPercent": 25,
+                  "weightPercent": 20,
                   "modality": "Individual",
                   "observation": ""
                 }
@@ -75,7 +75,8 @@ public class OpenRouterFleetService {
             """;
 
     /**
-     * Attempts to parse raw syllabus text using the OpenRouter multi-key fleet with automatic fallback.
+     * Extrae y estructura un sílabo en JSON utilizando selección dinámica de modelos
+     * en tiempo real con OpenRouter y rotación resiliente entre claves de la flota.
      */
     public Optional<Syllabus> parseSyllabusWithAi(String rawPdfText, String courseCode) {
         if (!properties.isEnabled() || properties.getKeys() == null || properties.getKeys().isEmpty()) {
@@ -87,85 +88,81 @@ public class OpenRouterFleetService {
             return Optional.empty();
         }
 
-        // Truncate if excessively long to stay within token limits
         String truncatedText = rawPdfText.length() > 25000 ? rawPdfText.substring(0, 25000) : rawPdfText;
 
-        List<String> models = new ArrayList<>();
-        if (properties.getPrimaryModel() != null && !properties.getPrimaryModel().isBlank()) {
-            models.add(properties.getPrimaryModel());
-        }
-        if (properties.getFallbackModels() != null) {
-            models.addAll(properties.getFallbackModels());
-        }
+        // 1. Obtener modelos rankeados dinámicamente según catálogo en vivo y scoring (máximo 3 según API OpenRouter)
+        List<String> dynamicModels = modelSelector.getRankedFreeModels(3);
+        String primaryModel = !dynamicModels.isEmpty() ? dynamicModels.get(0) : "cohere/north-mini-code:free";
 
         int totalKeys = properties.getKeys().size();
         int attempts = 0;
-        int maxAttempts = Math.min(totalKeys * models.size(), 15);
+        int maxAttempts = Math.min(totalKeys, 12);
 
         while (attempts < maxAttempts) {
+            attempts++;
             int keyIdx = Math.abs(currentKeyIndex.get() % totalKeys);
             String apiKey = properties.getKeys().get(keyIdx);
             String maskedKey = apiKey.length() > 14 ? apiKey.substring(0, 14) + "..." : "key-" + keyIdx;
 
-            for (String model : models) {
-                attempts++;
-                try {
-                    log.info("[OpenRouterFleet] 🤖 Intentando extracción con Modelo='{}' usando Clave #{}/{} ({})", 
-                            model, (keyIdx + 1), totalKeys, maskedKey);
+            try {
+                log.info("[OpenRouterFleet] 🤖 Solicitando extracción IA: Modelo Primario='{}' (Fallbacks: {}) usando Clave #{}/{} ({})", 
+                        primaryModel, dynamicModels, (keyIdx + 1), totalKeys, maskedKey);
 
-                    Map<String, Object> payload = new LinkedHashMap<>();
-                    payload.put("model", model);
-                    payload.put("messages", List.of(
-                            Map.of("role", "system", "content", SYSTEM_PROMPT),
-                            Map.of("role", "user", "content", "Course Code: " + courseCode + "\n\nSyllabus Content:\n" + truncatedText)
-                    ));
-                    payload.put("temperature", 0.1);
-                    payload.put("max_tokens", 2500);
+                Map<String, Object> payload = new LinkedHashMap<>();
+                payload.put("model", primaryModel);
+                payload.put("models", dynamicModels.subList(0, Math.min(3, dynamicModels.size())));
+                payload.put("provider", Map.of("allow_fallbacks", true));
+                payload.put("messages", List.of(
+                        Map.of("role", "system", "content", SYSTEM_PROMPT),
+                        Map.of("role", "user", "content", "Course Code: " + courseCode + "\n\nSyllabus Content:\n" + truncatedText)
+                ));
+                payload.put("temperature", 0.1);
+                payload.put("max_tokens", 2500);
 
-                    String body = objectMapper.writeValueAsString(payload);
+                String body = objectMapper.writeValueAsString(payload);
 
-                    HttpRequest request = HttpRequest.newBuilder()
-                            .uri(URI.create(properties.getApiUrl() + "/chat/completions"))
-                            .timeout(Duration.ofSeconds(8))
-                            .header("Authorization", "Bearer " + apiKey)
-                            .header("Content-Type", "application/json")
-                            .header("HTTP-Referer", "https://utp-academic-gateway.local")
-                            .header("X-Title", "UTP Academic Gateway")
-                            .POST(HttpRequest.BodyPublishers.ofString(body))
-                            .build();
+                HttpRequest request = HttpRequest.newBuilder()
+                        .uri(URI.create(properties.getApiUrl() + "/chat/completions"))
+                        .timeout(Duration.ofSeconds(12))
+                        .header("Authorization", "Bearer " + apiKey)
+                        .header("Content-Type", "application/json")
+                        .header("HTTP-Referer", "https://utp-academic-gateway.local")
+                        .header("X-Title", "UTP Academic Gateway")
+                        .POST(HttpRequest.BodyPublishers.ofString(body))
+                        .build();
 
-                    HttpResponse<String> response = httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
-                            .get(6, java.util.concurrent.TimeUnit.SECONDS);
+                HttpResponse<String> response = httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
+                        .get(12, TimeUnit.SECONDS);
 
-                    if (response.statusCode() == 200) {
-                        JsonNode resJson = objectMapper.readTree(response.body());
-                        JsonNode choices = resJson.path("choices");
-                        if (choices.isArray() && !choices.isEmpty()) {
-                            String content = choices.get(0).path("message").path("content").asText("");
-                            Optional<Syllabus> parsed = parseAiResponseToDomain(content, courseCode);
-                            if (parsed.isPresent()) {
-                                log.info("[OpenRouterFleet] ✨ Sílabo exitosamente extraído con IA (Modelo: {}, Clave: #{}) para curso: {}", 
-                                        model, (keyIdx + 1), courseCode);
-                                return parsed;
-                            }
+                if (response.statusCode() == 200) {
+                    JsonNode resJson = objectMapper.readTree(response.body());
+                    JsonNode choices = resJson.path("choices");
+                    if (choices.isArray() && !choices.isEmpty()) {
+                        String content = choices.get(0).path("message").path("content").asText("");
+                        Optional<Syllabus> parsed = parseAiResponseToDomain(content, courseCode);
+                        if (parsed.isPresent()) {
+                            String usedModel = resJson.path("model").asText(primaryModel);
+                            log.info("[OpenRouterFleet] ✨ Sílabo exitosamente extraído con IA (Modelo activo: {}, Clave #{}) para curso: {}", 
+                                    usedModel, (keyIdx + 1), courseCode);
+                            return parsed;
                         }
-                    } else if (response.statusCode() == 429 || response.statusCode() == 402 || response.statusCode() == 403) {
-                        log.warn("[OpenRouterFleet] ⚠️ Límite de cuota o rate-limit alcanzado (HTTP {}) en Modelo '{}' con Clave #{}. Probando siguiente modelo/cuenta...", 
-                                response.statusCode(), model, (keyIdx + 1));
-                    } else {
-                        log.warn("[OpenRouterFleet] Error HTTP {} en modelo {} con Clave #{}: {}", 
-                                response.statusCode(), model, (keyIdx + 1), response.body());
                     }
-                } catch (Exception e) {
-                    log.warn("[OpenRouterFleet] Excepción en llamada a {}: {}", model, e.getMessage());
+                } else if (response.statusCode() == 429 || response.statusCode() == 402 || response.statusCode() == 403) {
+                    log.warn("[OpenRouterFleet] ⚠️ Límite de cuota o rate-limit (HTTP {}) en Clave #{}. Rotando a siguiente cuenta...", 
+                            response.statusCode(), (keyIdx + 1));
+                    currentKeyIndex.incrementAndGet();
+                } else {
+                    log.warn("[OpenRouterFleet] Error HTTP {} con Clave #{}: {}", 
+                            response.statusCode(), (keyIdx + 1), response.body());
+                    currentKeyIndex.incrementAndGet();
                 }
+            } catch (Exception e) {
+                log.warn("[OpenRouterFleet] Excepción en llamada IA con Clave #{}: {}", (keyIdx + 1), e.getMessage());
+                currentKeyIndex.incrementAndGet();
             }
-
-            // Move to next key for next iteration
-            currentKeyIndex.incrementAndGet();
         }
 
-        log.warn("[OpenRouterFleet] Agotados intentos de IA con fallback multi-cuenta. Retornando vacío para fallback determinista.");
+        log.warn("[OpenRouterFleet] Agotados intentos de IA con flota OpenRouter. Retornando vacío para fallback determinista.");
         return Optional.empty();
     }
 
@@ -175,14 +172,12 @@ public class OpenRouterFleetService {
         }
 
         try {
-            // Strip any markdown code fences if present (e.g. ```json ... ```)
             String cleanJson = jsonText.trim();
             if (cleanJson.startsWith("```")) {
                 cleanJson = cleanJson.replaceFirst("^```[a-zA-Z]*\\s*", "");
                 cleanJson = cleanJson.replaceFirst("\\s*```$", "");
             }
 
-            // Find first '{' and last '}'
             int start = cleanJson.indexOf('{');
             int end = cleanJson.lastIndexOf('}');
             if (start != -1 && end != -1 && end > start) {

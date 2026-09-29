@@ -23,7 +23,8 @@ class OpenRouterFleetServiceTest {
     void setUp() {
         OpenRouterProperties properties = new OpenRouterProperties();
         ObjectMapper objectMapper = new ObjectMapper();
-        service = new OpenRouterFleetService(properties, objectMapper);
+        OpenRouterModelSelector selector = new OpenRouterModelSelector(properties, objectMapper);
+        service = new OpenRouterFleetService(properties, selector, objectMapper);
     }
 
     @Test
