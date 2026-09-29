@@ -52,12 +52,75 @@ class SyllabusDeterministicValidatorTest {
     }
 
     @Test
-    @DisplayName("Debe aceptar un sílabo académico válido y consistente")
+    @DisplayName("Debe aceptar un sílabo académico válido y consistente de 18 semanas")
     void shouldAcceptValidSyllabus() {
         Syllabus syllabus = createValidBase().build();
         SyllabusDeterministicValidator.ValidationResult result = validator.validate(syllabus);
 
         assertTrue(result.isValid(), "Un sílabo completo y coherente debe ser válido: " + result.getViolations());
+    }
+
+    @Test
+    @DisplayName("Debe aceptar sílabos de Ciclo de Verano (8 semanas) sin forzar 18 semanas")
+    void shouldAcceptSummerCycleCourse() {
+        List<SyllabusEvaluation> summerEvals = List.of(
+                SyllabusEvaluation.builder().type("PC1").description("Práctica Calificada 1").weightPercent(30).week(3).build(),
+                SyllabusEvaluation.builder().type("PC2").description("Práctica Calificada 2").weightPercent(30).week(6).build(),
+                SyllabusEvaluation.builder().type("EF").description("Examen Final").weightPercent(40).week(8).build()
+        );
+
+        List<SyllabusWeeklySession> summerSchedule = new ArrayList<>();
+        for (int w = 1; w <= 8; w++) {
+            summerSchedule.add(SyllabusWeeklySession.builder()
+                    .week(w)
+                    .unit("Unidad " + ((w - 1) / 2 + 1))
+                    .topic("Tema de verano intensivo semana " + w)
+                    .activities("Laboratorio acelerado semana " + w)
+                    .build());
+        }
+
+        Syllabus summerSyllabus = createValidBase()
+                .id("100000VERANO")
+                .courseCode("100000VERANO")
+                .courseName("ALGORITMOS AVANZADOS - CICLO VERANO")
+                .formula("(0.30*PC1) + (0.30*PC2) + (0.40*EF)")
+                .evaluations(summerEvals)
+                .weeklySchedule(summerSchedule)
+                .build();
+
+        SyllabusDeterministicValidator.ValidationResult result = validator.validate(summerSyllabus);
+        assertTrue(result.isValid(), "Un curso de ciclo de verano (8 semanas) debe ser aceptado sin sesgo: " + result.getViolations());
+    }
+
+    @Test
+    @DisplayName("Debe aceptar cursos modulares intensivos (6 semanas)")
+    void shouldAcceptModularCourse() {
+        List<SyllabusEvaluation> modularEvals = List.of(
+                SyllabusEvaluation.builder().type("EC1").description("Evaluación Continua 1").weightPercent(40).week(3).build(),
+                SyllabusEvaluation.builder().type("EF").description("Evaluación Final").weightPercent(60).week(6).build()
+        );
+
+        List<SyllabusWeeklySession> modularSchedule = new ArrayList<>();
+        for (int w = 1; w <= 6; w++) {
+            modularSchedule.add(SyllabusWeeklySession.builder()
+                    .week(w)
+                    .unit("Módulo " + w)
+                    .topic("Taller intensivo sesión " + w)
+                    .activities("Práctica aplicada " + w)
+                    .build());
+        }
+
+        Syllabus modularSyllabus = createValidBase()
+                .id("100000MODULAR")
+                .courseCode("100000MODULAR")
+                .courseName("TALLER DE ESPECIALIZACIÓN MODULAR")
+                .formula("(0.40*EC1) + (0.60*EF)")
+                .evaluations(modularEvals)
+                .weeklySchedule(modularSchedule)
+                .build();
+
+        SyllabusDeterministicValidator.ValidationResult result = validator.validate(modularSyllabus);
+        assertTrue(result.isValid(), "Un curso modular (6 semanas) debe ser aceptado: " + result.getViolations());
     }
 
     @Test

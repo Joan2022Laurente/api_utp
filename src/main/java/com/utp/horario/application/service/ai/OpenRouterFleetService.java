@@ -40,7 +40,12 @@ public class OpenRouterFleetService {
 
     private static final String SYSTEM_PROMPT = """
             You are an elite academic syllabus extractor.
-            Given the raw text of a university syllabus (UTP Perú), extract the complete academic structure into strict, clean JSON.
+            Given the clean markdown of a university syllabus (UTP Perú), extract the complete academic structure into strict, clean JSON.
+            CRITICAL RULES:
+            - Course durations vary dynamically by season and program (e.g. summer cycles ~8-9 weeks, regular semesters 16-18 weeks, modular courses 4-8 weeks).
+            - Extract ONLY the exact weeks and sessions declared in the document. DO NOT assume 18 weeks and DO NOT invent phantom weeks.
+            - Extract exact evaluation codes and weights summing to ~100%.
+
             Return ONLY a valid JSON object matching this schema:
             {
               "courseCode": "100000ST99",
@@ -88,7 +93,8 @@ public class OpenRouterFleetService {
             return Optional.empty();
         }
 
-        String truncatedText = rawPdfText.length() > 25000 ? rawPdfText.substring(0, 25000) : rawPdfText;
+        // Capping a 10,000 caracteres para evitar saturación de contexto en LLMs y llamadas pesadas
+        String truncatedText = rawPdfText.length() > 10000 ? rawPdfText.substring(0, 10000) : rawPdfText;
 
         // 1. Obtener modelos rankeados dinámicamente según catálogo en vivo y scoring (máximo 3 según API OpenRouter)
         List<String> dynamicModels = modelSelector.getRankedFreeModels(3);

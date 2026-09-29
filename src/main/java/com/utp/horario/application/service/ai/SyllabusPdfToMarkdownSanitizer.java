@@ -73,9 +73,10 @@ public class SyllabusPdfToMarkdownSanitizer {
             cleanedLines.add(trimmed);
         }
 
-        // 3. Reconstruir texto uniendo líneas cortadas a mitad de párrafo
+        // 3. Reconstruir texto uniendo líneas cortadas y omitiendo bibliografía para no saturar al LLM
         StringBuilder sb = new StringBuilder();
         String prevLine = "";
+        boolean inBibliography = false;
 
         for (String line : cleanedLines) {
             if (line.isEmpty()) {
@@ -84,6 +85,20 @@ public class SyllabusPdfToMarkdownSanitizer {
                     prevLine = "";
                 }
                 continue;
+            }
+
+            String upper = line.toUpperCase();
+            if (upper.matches(".*(?:\\d+\\.\\s*)?(?:FUENTES DE INFORMACI[OÓ]N|BIBLIOGRAF[IÍ]A|PLAN DE APRENDIZAJE).*")) {
+                inBibliography = true;
+                continue;
+            }
+
+            if (inBibliography) {
+                if (isSectionTitle(line) && !upper.contains("FUENTES") && !upper.contains("BIBLIOGRAF") && !upper.contains("PLAN DE APRENDIZAJE")) {
+                    inBibliography = false;
+                } else {
+                    continue; // Omitir catálogo de libros e ISBNs innecesarios para estructuración de notas/sesiones
+                }
             }
 
             boolean isTitle = isSectionTitle(line);
@@ -132,13 +147,15 @@ public class SyllabusPdfToMarkdownSanitizer {
         if (line.length() > 60 || line.length() < 3) return false;
         String upper = line.toUpperCase();
         return upper.contains("INFORMACIÓN GENERAL") ||
+               upper.contains("INFORMACION GENERAL") ||
                upper.contains("LOGRO DEL CURSO") ||
                upper.contains("LOGRO GENERAL DE APRENDIZAJE") ||
                upper.contains("UNIDADES DE APRENDIZAJE") ||
                upper.contains("SISTEMA DE EVALUACIÓN") ||
+               upper.contains("SISTEMA DE EVALUACION") ||
                upper.contains("CRONOGRAMA DE ACTIVIDADES") ||
                upper.contains("METODOLOGÍA") ||
-               upper.contains("FUENTES DE INFORMACIÓN") ||
+               upper.contains("METODOLOGIA") ||
                upper.contains("COMPETENCIAS");
     }
 }

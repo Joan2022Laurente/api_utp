@@ -132,8 +132,8 @@ public class SyllabusDeterministicValidator {
                 totalWeight += ev.getWeightPercent();
             }
 
-            if (ev.getWeek() != null && (ev.getWeek() < 1 || ev.getWeek() > 18)) {
-                errors.add("Semana de evaluación '" + type + "' fuera del semestre [1-18]: " + ev.getWeek());
+            if (ev.getWeek() != null && (ev.getWeek() < 1 || ev.getWeek() > 24)) {
+                errors.add("Semana de evaluación '" + type + "' fuera de rango académico [1-24]: " + ev.getWeek());
             }
         }
 
@@ -168,8 +168,9 @@ public class SyllabusDeterministicValidator {
             return;
         }
 
-        if (schedule.size() < 8) {
-            errors.add("El cronograma debe cubrir al menos 8 semanas (encontradas: " + schedule.size() + ")");
+        // Admite cursos modulares, intensivos de verano (8-9 sem) y semestres regulares (16-18 sem)
+        if (schedule.size() < 4) {
+            errors.add("El cronograma debe cubrir al menos 4 semanas para módulos intensivos (encontradas: " + schedule.size() + ")");
         }
 
         Set<Integer> seenWeeks = new HashSet<>();
@@ -181,8 +182,8 @@ public class SyllabusDeterministicValidator {
                 continue;
             }
 
-            if (week < 1 || week > 18) {
-                errors.add("Semana fuera de rango académico [1-18]: " + week);
+            if (week < 1 || week > 24) {
+                errors.add("Semana fuera de rango académico [1-24]: " + week);
             }
 
             if (!seenWeeks.add(week)) {
