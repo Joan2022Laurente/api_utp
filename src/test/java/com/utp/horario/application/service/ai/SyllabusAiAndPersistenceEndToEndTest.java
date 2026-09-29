@@ -62,13 +62,18 @@ class SyllabusAiAndPersistenceEndToEndTest {
         repositoryAdapter = new SyllabusRepositoryAdapter(springDataRepoMock, supabaseClient, objectMapper);
         SyllabusParserEngine parserEngine = new SyllabusParserEngine();
         SyllabusMarkdownExporter markdownExporter = new SyllabusMarkdownExporter();
+        SyllabusPdfToMarkdownSanitizer sanitizer = new SyllabusPdfToMarkdownSanitizer();
+        com.utp.horario.application.service.validation.SyllabusDeterministicValidator validator = 
+                new com.utp.horario.application.service.validation.SyllabusDeterministicValidator();
 
         syllabusService = new SyllabusServiceImpl(
                 repositoryAdapter,
                 gatewayPortMock,
                 parserEngine,
                 openRouterFleetService,
-                markdownExporter
+                markdownExporter,
+                sanitizer,
+                validator
         );
     }
 

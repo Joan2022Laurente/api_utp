@@ -43,6 +43,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
     private final ObjectMapper objectMapper;
     private final Map<String, String> buildingCache = new ConcurrentHashMap<>();
     private final Map<String, String> studentPaoUserMap = new ConcurrentHashMap<>();
+    private volatile String lastActiveToken = "";
     private static final Pattern EVAL_PATTERN = Pattern.compile("(?i)(PC\\d*|AP\\d*|EC\\d*|TI\\d*|EP|EF|EXFN|EXPA|PROY|AVANCE|PORTAFOLIO|PARTICIPACI[OÓ]N|EXAMEN)");
 
     public UtpPortalGatewayAdapter() {
@@ -162,6 +163,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 int expiresIn = root.hasNonNull("expires_in") ? root.path("expires_in").asInt(1800) : 1800;
 
                 StudentProfile base = parseProfileFromTokens(accessToken, refreshToken, expiresIn, cleanUsername);
+                this.lastActiveToken = accessToken;
                 // El JWT pao-web NO incluye career/campus/cycle — enriquecer desde Portal GraphQL
                 StudentProfile profile = enrichProfileFromPortal(base, accessToken);
                 log.info("[UTP SSO Auth] Autenticación exitosa: {} | campus='{}' | carrera='{}' | ciclo={}",
@@ -992,18 +994,20 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
             return "";
         }
 
+        String effectiveToken = (token != null && !token.isBlank()) ? token : this.lastActiveToken;
+
         try {
             String pdfUrl = courseCodeOrUrl.trim();
 
             if (!pdfUrl.startsWith("http://") && !pdfUrl.startsWith("https://")) {
-                String userId = extractUserIdFromToken(token);
-                String tenantId = extractTenantIdFromToken(token);
+                String userId = extractUserIdFromToken(effectiveToken);
+                String tenantId = extractTenantIdFromToken(effectiveToken);
 
-                String studentCode = extractStudentCodeFromToken(token);
+                String studentCode = extractStudentCodeFromToken(effectiveToken);
                 CourseRef ref = findCourseRef(studentCode, pdfUrl);
                 if (ref == null || (ref.syllabusUrl.isBlank() && ref.numericSection.isBlank() && ref.courseUuid.isBlank())) {
-                    if (token != null && !token.isBlank()) {
-                        populateCourseSectionsFromPao(token);
+                    if (effectiveToken != null && !effectiveToken.isBlank()) {
+                        populateCourseSectionsFromPao(effectiveToken);
                         ref = findCourseRef(studentCode, pdfUrl);
                     }
                 }
@@ -1039,8 +1043,8 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                                 .header("origin", "https://class.utp.edu.pe")
                                 .header("referer", "https://class.utp.edu.pe/");
 
-                        if (token != null && !token.isBlank()) {
-                            reqBuilder.header("authorization", token.startsWith("Bearer ") ? token : "Bearer " + token);
+                        if (effectiveToken != null && !effectiveToken.isBlank()) {
+                            reqBuilder.header("authorization", effectiveToken.startsWith("Bearer ") ? effectiveToken : "Bearer " + effectiveToken);
                         }
 
                         HttpResponse<String> res = httpClient.send(reqBuilder.GET().build(), HttpResponse.BodyHandlers.ofString());
