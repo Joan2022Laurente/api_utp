@@ -25,7 +25,7 @@ spring:
 
 supabase:
   enabled: ${SUPABASE_ENABLED:true}
-  url: ${SUPABASE_URL:https://hvunobsbasdksiajmfjf.supabase.co}
+  url: ${SUPABASE_URL:https://vngkmsmyuuukyzvqbovs.supabase.co}
   service-role-key: ${SUPABASE_SERVICE_ROLE_KEY:}
   anon-key: ${SUPABASE_ANON_KEY:}
   table: ${SUPABASE_SYLLABI_TABLE:official_syllabi}
