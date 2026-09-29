@@ -120,12 +120,13 @@ public class OpenRouterFleetService {
                             Map.of("role", "user", "content", "Course Code: " + courseCode + "\n\nSyllabus Content:\n" + truncatedText)
                     ));
                     payload.put("temperature", 0.1);
+                    payload.put("max_tokens", 2500);
 
                     String body = objectMapper.writeValueAsString(payload);
 
                     HttpRequest request = HttpRequest.newBuilder()
                             .uri(URI.create(properties.getApiUrl() + "/chat/completions"))
-                            .timeout(Duration.ofSeconds(20))
+                            .timeout(Duration.ofSeconds(8))
                             .header("Authorization", "Bearer " + apiKey)
                             .header("Content-Type", "application/json")
                             .header("HTTP-Referer", "https://utp-academic-gateway.local")
@@ -133,7 +134,8 @@ public class OpenRouterFleetService {
                             .POST(HttpRequest.BodyPublishers.ofString(body))
                             .build();
 
-                    HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+                    HttpResponse<String> response = httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
+                            .get(6, java.util.concurrent.TimeUnit.SECONDS);
 
                     if (response.statusCode() == 200) {
                         JsonNode resJson = objectMapper.readTree(response.body());
@@ -148,10 +150,8 @@ public class OpenRouterFleetService {
                             }
                         }
                     } else if (response.statusCode() == 429 || response.statusCode() == 402 || response.statusCode() == 403) {
-                        log.warn("[OpenRouterFleet] ⚠️ Límite de cuota o rate-limit alcanzado (HTTP {}) en Clave #{}. Rotando a siguiente cuenta...", 
-                                response.statusCode(), (keyIdx + 1));
-                        currentKeyIndex.incrementAndGet();
-                        break; // Break model loop, switch to next key in while loop
+                        log.warn("[OpenRouterFleet] ⚠️ Límite de cuota o rate-limit alcanzado (HTTP {}) en Modelo '{}' con Clave #{}. Probando siguiente modelo/cuenta...", 
+                                response.statusCode(), model, (keyIdx + 1));
                     } else {
                         log.warn("[OpenRouterFleet] Error HTTP {} en modelo {} con Clave #{}: {}", 
                                 response.statusCode(), model, (keyIdx + 1), response.body());

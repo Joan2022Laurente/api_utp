@@ -26,10 +26,8 @@ public class OpenRouterProperties {
     private String apiUrl = "https://openrouter.ai/api/v1";
     private String primaryModel = "qwen/qwen3.8-27b:free";
     private List<String> fallbackModels = new ArrayList<>(Arrays.asList(
-            "google/gemma-4-31b-it:free",
-            "nvidia/nemotron-3.5-lightning:free",
-            "liquid/lfm-2.5-2.6b:free",
-            "google/gemma-4-26b-a4b-it:free"
+            "google/gemma-4-26b-a4b-it:free",
+            "liquid/lfm-2.5-2.6b:free"
     ));
     private List<String> keys = new ArrayList<>();
 
