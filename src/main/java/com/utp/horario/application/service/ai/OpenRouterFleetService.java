@@ -123,7 +123,7 @@ public class OpenRouterFleetService {
 
                 HttpRequest request = HttpRequest.newBuilder()
                         .uri(URI.create(properties.getApiUrl() + "/chat/completions"))
-                        .timeout(Duration.ofSeconds(12))
+                        .timeout(Duration.ofSeconds(35))
                         .header("Authorization", "Bearer " + apiKey)
                         .header("Content-Type", "application/json")
                         .header("HTTP-Referer", "https://utp-academic-gateway.local")
@@ -132,7 +132,7 @@ public class OpenRouterFleetService {
                         .build();
 
                 HttpResponse<String> response = httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
-                        .get(12, TimeUnit.SECONDS);
+                        .get(35, TimeUnit.SECONDS);
 
                 if (response.statusCode() == 200) {
                     JsonNode resJson = objectMapper.readTree(response.body());
@@ -157,7 +157,8 @@ public class OpenRouterFleetService {
                     currentKeyIndex.incrementAndGet();
                 }
             } catch (Exception e) {
-                log.warn("[OpenRouterFleet] Excepción en llamada IA con Clave #{}: {}", (keyIdx + 1), e.getMessage());
+                log.warn("[OpenRouterFleet] Excepción ({}) en llamada IA con Clave #{}: {}", 
+                        e.getClass().getSimpleName(), (keyIdx + 1), e.getMessage());
                 currentKeyIndex.incrementAndGet();
             }
         }

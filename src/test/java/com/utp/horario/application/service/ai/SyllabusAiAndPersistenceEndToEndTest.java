@@ -75,17 +75,40 @@ class SyllabusAiAndPersistenceEndToEndTest {
     @Test
     @DisplayName("Cache Hit: Curso existente en Supabase DB se retorna inmediatamente de la base de datos")
     void testCacheHitFromSupabase() {
-        // "100000SI97" (SERVICIOS CLOUD) ya reside en Supabase
-        Syllabus s = syllabusService.getSyllabus("100000SI97", null, null, null);
+        String code = "100000TEST_CACHE";
+        supabaseClient.upsert(Syllabus.builder()
+                .id(code)
+                .courseCode(code)
+                .courseName("SERVICIOS CLOUD EN CACHE")
+                .formula("(0.3*PC1) + (0.7*EF)")
+                .evaluations(List.of(
+                        com.utp.horario.domain.model.SyllabusEvaluation.builder()
+                                .type("PC1")
+                                .description("Práctica Calificada 1")
+                                .weightPercent(30)
+                                .week(5)
+                                .build()
+                ))
+                .weeklySchedule(List.of(
+                        com.utp.horario.domain.model.SyllabusWeeklySession.builder()
+                                .week(1)
+                                .unit("Unidad 1")
+                                .topic("Introducción a la Nube")
+                                .activities("Laboratorio 1")
+                                .build()
+                ))
+                .build());
+
+        Syllabus s = syllabusService.getSyllabus(code, null, null, null);
 
         assertNotNull(s, "El sílabo debe ser retornado");
-        assertEquals("100000SI97", s.getCourseCode());
-        assertEquals("SERVICIOS CLOUD", s.getCourseName());
+        assertEquals(code, s.getCourseCode());
+        assertEquals("SERVICIOS CLOUD EN CACHE", s.getCourseName());
         assertNotNull(s.getFormula());
         assertNotNull(s.getEvaluations());
         assertFalse(s.getEvaluations().isEmpty(), "Debe contener evaluaciones guardadas en Supabase");
         assertNotNull(s.getWeeklySchedule());
-        assertFalse(s.getWeeklySchedule().isEmpty(), "Debe contener el cronograma de 18 semanas de Supabase");
+        assertFalse(s.getWeeklySchedule().isEmpty(), "Debe contener el cronograma de Supabase");
 
         // Verificar que NO se intentó descargar el PDF de la UTP ya que estaba en caché de BD
         Mockito.verifyNoInteractions(gatewayPortMock);

@@ -28,26 +28,51 @@ class SupabaseSyllabusClientTest {
     }
 
     @Test
-    @DisplayName("Debe consultar y mapear correctamente sílabos existentes en Supabase PostgreSQL")
-    void shouldFindExistingSyllabusInSupabase() {
-        Optional<Syllabus> syllabus = client.findByCourseCode("100000SI97");
+    @DisplayName("Debe persistir y recuperar correctamente un sílabo en Supabase PostgreSQL")
+    void shouldPersistAndRetrieveSyllabusInSupabase() {
+        String testCode = "100000TEST_UNIT";
+        Syllabus sample = Syllabus.builder()
+                .id(testCode)
+                .courseCode(testCode)
+                .courseName("CURSO DE PRUEBA UNITARIA")
+                .credits(4)
+                .weeklyHours(5)
+                .modality("Presencial")
+                .formula("(0.3*PC1) + (0.7*EF)")
+                .learningGoal("Objetivo de aprendizaje del curso de prueba")
+                .evaluations(List.of(
+                        com.utp.horario.domain.model.SyllabusEvaluation.builder()
+                                .type("PC1")
+                                .description("Práctica Calificada 1")
+                                .weightPercent(30)
+                                .week(5)
+                                .build()
+                ))
+                .weeklySchedule(List.of(
+                        com.utp.horario.domain.model.SyllabusWeeklySession.builder()
+                                .week(1)
+                                .unit("Unidad 1")
+                                .topic("Introducción y conceptos")
+                                .activities("Laboratorio práctico 1")
+                                .build()
+                ))
+                .build();
 
-        assertTrue(syllabus.isPresent(), "El curso 100000SI97 debe existir en Supabase");
-        Syllabus s = syllabus.get();
-        assertEquals("100000SI97", s.getCourseCode());
-        assertEquals("SERVICIOS CLOUD", s.getCourseName());
-        assertNotNull(s.getFormula());
+        client.upsert(sample);
+
+        Optional<Syllabus> found = client.findByCourseCode(testCode);
+        assertTrue(found.isPresent(), "El sílabo recién guardado debe existir en Supabase");
+        Syllabus s = found.get();
+        assertEquals(testCode, s.getCourseCode());
+        assertEquals("CURSO DE PRUEBA UNITARIA", s.getCourseName());
+        assertEquals("(0.3*PC1) + (0.7*EF)", s.getFormula());
         assertNotNull(s.getWeeklySchedule());
-        assertFalse(s.getWeeklySchedule().isEmpty(), "Debe contener el cronograma semanal");
+        assertFalse(s.getWeeklySchedule().isEmpty());
         assertNotNull(s.getEvaluations());
-        assertFalse(s.getEvaluations().isEmpty(), "Debe contener las evaluaciones");
-    }
+        assertFalse(s.getEvaluations().isEmpty());
 
-    @Test
-    @DisplayName("Debe listar todos los sílabos almacenados en Supabase")
-    void shouldListAllSyllabi() {
         List<Syllabus> all = client.findAll();
         assertNotNull(all);
-        assertTrue(all.size() >= 6, "Debe tener al menos los 6 sílabos oficiales cargados");
+        assertTrue(all.stream().anyMatch(item -> testCode.equals(item.getCourseCode())));
     }
 }
