@@ -96,7 +96,7 @@ public class OpenRouterFleetService {
 
         int totalKeys = properties.getKeys().size();
         int attempts = 0;
-        int maxAttempts = Math.min(totalKeys, 12);
+        int maxAttempts = Math.min(totalKeys, 2);
 
         while (attempts < maxAttempts) {
             attempts++;
@@ -123,7 +123,7 @@ public class OpenRouterFleetService {
 
                 HttpRequest request = HttpRequest.newBuilder()
                         .uri(URI.create(properties.getApiUrl() + "/chat/completions"))
-                        .timeout(Duration.ofSeconds(35))
+                        .timeout(Duration.ofSeconds(18))
                         .header("Authorization", "Bearer " + apiKey)
                         .header("Content-Type", "application/json")
                         .header("HTTP-Referer", "https://utp-academic-gateway.local")
@@ -132,7 +132,7 @@ public class OpenRouterFleetService {
                         .build();
 
                 HttpResponse<String> response = httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
-                        .get(35, TimeUnit.SECONDS);
+                        .get(18, TimeUnit.SECONDS);
 
                 if (response.statusCode() == 200) {
                     JsonNode resJson = objectMapper.readTree(response.body());

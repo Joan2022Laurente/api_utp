@@ -183,6 +183,8 @@ public class SupabaseSyllabusClient {
         String courseCode = row.path("course_code").asText(courseId);
         String courseName = row.path("course_name").asText("");
         int credits = row.path("credits").asInt(3);
+        String hoursStr = row.path("hours").asText("4h").replaceAll("[^0-9]", "");
+        Integer weeklyHours = hoursStr.isEmpty() ? 4 : Integer.parseInt(hoursStr);
         String modality = row.path("modality").asText("Presencial");
         String formula = row.path("formula").asText("");
         String learningGoal = row.path("learning_goal").asText("");
@@ -250,6 +252,7 @@ public class SupabaseSyllabusClient {
                 .courseCode(courseCode)
                 .courseName(courseName)
                 .credits(credits)
+                .weeklyHours(weeklyHours)
                 .modality(modality)
                 .formula(formula)
                 .learningGoal(learningGoal)
