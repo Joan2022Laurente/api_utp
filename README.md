@@ -280,11 +280,13 @@ El proyecto mantiene un rigor de ingeniería de nivel Staff Engineer:
 
 ## 5. Guía de Integración para Agentes y LLMs
 
+> 📘 **Especificación Técnica Completa:** Consulta la guía compacta de referencia técnica y payloads en [docs/ENDPOINTS.md](docs/ENDPOINTS.md).
+
 Si estás desarrollando un bot, agente de IA o microservicio backend que consuma esta API:
 
 1. **Flujo de Autenticación:**
    - Realizar `POST /auth/login` con el usuario institucional del alumno.
-   - Guardar el `token` devuelto. Utilizar siempre el header `Authorization: Bearer <token>` en todas las llamadas subsiguientes.
+   - Guardar el `token` devuelto. Utilizar siempre el header `Authorization: Bearer <token>` en todas las llamadas subsiguientes (o aprovechar el fallback en memoria del gateway).
 2. **Contexto de Respuestas:**
    - Todas las respuestas exitosas devuelven la envoltura estándar:
      ```json
