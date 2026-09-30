@@ -1,9 +1,13 @@
+"use client";
+
 import React from "react";
 
 export const LLMPromptPipeline: React.FC = () => {
+  const baseUrl = typeof window !== "undefined" ? window.location.origin : "";
+
   return (
     <section id="llm-pipeline" className="llm-section">
-      <div className="section-label">// AI & AGENTIC INTEGRATION</div>
+      <div className="section-label">// AI &amp; AGENTIC INTEGRATION</div>
       <h2 className="section-title">Pipeline Semántico para LLMs y Asistentes RAG</h2>
 
       <div className="llm-container">
@@ -43,10 +47,11 @@ export const LLMPromptPipeline: React.FC = () => {
           </div>
 
           <pre style={{ fontSize: "0.8125rem", lineHeight: 1.55, overflowX: "auto", color: "#E0DDD5" }}>
-            <code>{`# 1. Obtener sílabo depurado de SyncUTP
+            <code>{
+`# 1. Obtener sílabo depurado de SyncUTP
 res = requests.get(
-  f"http://localhost:8080/api/v1/syllabus/{course_code}/markdown",
-  headers={"Authorization": f"Bearer {jwt_token}"}
+  f"${baseUrl}/api/v1/syllabus/{'{course_code}'}/markdown",
+  headers={"Authorization": f"Bearer {'{jwt_token}'}"}
 )
 clean_markdown = res.text
 
@@ -55,7 +60,7 @@ system_prompt = f"""
 Eres un tutor universitario de la UTP. Responde dudas del estudiante
 basándote estrictamente en el siguiente sílabo oficial normalizado:
 
-{clean_markdown}
+{'{clean_markdown}'}
 """
 
 # 3. Llamada al LLM sin saturar el contexto
@@ -65,7 +70,8 @@ completion = client.chat.completions.create(
     {"role": "system", "content": system_prompt},
     {"role": "user", "content": "¿Qué temas entran en la PC2 y qué semana es?"}
   ]
-)`}</code>
+)`
+            }</code>
           </pre>
         </div>
       </div>

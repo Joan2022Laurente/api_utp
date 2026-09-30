@@ -3,6 +3,9 @@
 import React, { useState } from "react";
 import { HandwrittenAnnotation } from "./HandwrittenAnnotation";
 
+// Resolves to the current host at runtime: works on localhost AND production
+const BASE_URL = typeof window !== "undefined" ? window.location.origin : "";
+
 type EndpointCategory = "TODOS" | "AUTH" | "HORARIO" | "SÍLABO & LLM" | "NOTAS & FÓRMULAS" | "TAREAS & RÚBRICAS";
 
 interface SandboxEndpoint {
@@ -32,10 +35,10 @@ const allEndpoints: SandboxEndpoint[] = [
     title: "Sílabo Limpio para LLMs (Token-Saver)",
     description: "Retorna el contenido curricular formateado en Markdown depurado, eliminando ruido institucional y listo para alimentar agentes de IA.",
     headers: { "Authorization": "Bearer <TOKEN_JWT>", "Accept": "text/markdown" },
-    curl: `curl -X GET "http://localhost:8080/api/v1/syllabus/100000I04N/markdown" \\
+    curl: `curl -X GET "`+BASE_URL+`/api/v1/syllabus/100000I04N/markdown" \\
   -H "Authorization: Bearer \${SYNCUTP_JWT}" \\
   -H "Accept: text/markdown"`,
-    typescript: `const response = await fetch("http://localhost:8080/api/v1/syllabus/100000I04N/markdown", {
+    typescript: `const response = await fetch("`+BASE_URL+`/api/v1/syllabus/100000I04N/markdown", {
   headers: {
     "Authorization": \`Bearer \${token}\`,
     "Accept": "text/markdown"
@@ -44,7 +47,7 @@ const allEndpoints: SandboxEndpoint[] = [
 const markdownSyllabus = await response.text();`,
     python: `import requests
 res = requests.get(
-    "http://localhost:8080/api/v1/syllabus/100000I04N/markdown",
+    "`+BASE_URL+`/api/v1/syllabus/100000I04N/markdown",
     headers={"Authorization": f"Bearer {token}", "Accept": "text/markdown"}
 )
 clean_md = res.text`,
@@ -78,10 +81,10 @@ Fórmula Oficial: Promedio = (PC1 * 0.15) + (PC2 * 0.20) + (EP * 0.25) + (TF * 0
     description: "Autentica al estudiante con su código y contraseña UTP contra el SSO Keycloak institucional. Retorna perfil y par de tokens.",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username: "U20215894", password: "••••••••" }, null, 2),
-    curl: `curl -X POST "http://localhost:8080/api/v1/auth/login" \\
+    curl: `curl -X POST "`+BASE_URL+`/api/v1/auth/login" \\
   -H "Content-Type: application/json" \\
   -d '{"username": "U20215894", "password": "tu_password"}'`,
-    typescript: `const res = await fetch("http://localhost:8080/api/v1/auth/login", {
+    typescript: `const res = await fetch("`+BASE_URL+`/api/v1/auth/login", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ username: "U20215894", password: "tu_password" })
@@ -90,7 +93,7 @@ const { data } = await res.json();
 console.log("Tokens recibidos:", data.token, data.refreshToken);`,
     python: `import requests
 res = requests.post(
-    "http://localhost:8080/api/v1/auth/login",
+    "`+BASE_URL+`/api/v1/auth/login",
     json={"username": "U20215894", "password": "tu_password"}
 )
 data = res.json()["data"]`,
@@ -119,17 +122,17 @@ data = res.json()["data"]`,
     title: "Renovar Sesión (Refresh Token)",
     description: "Obtiene un nuevo access_token y refresh_token usando el refresh token sin reingresar credenciales.",
     headers: { "Content-Type": "application/json" },
-    curl: `curl -X POST "http://localhost:8080/api/v1/auth/refresh" \\
+    curl: `curl -X POST "`+BASE_URL+`/api/v1/auth/refresh" \\
   -H "Content-Type: application/json" \\
   -d '{"refreshToken": "eyJhbGciOiJIUzI1Ni..."}'`,
-    typescript: `const res = await fetch("http://localhost:8080/api/v1/auth/refresh", {
+    typescript: `const res = await fetch("`+BASE_URL+`/api/v1/auth/refresh", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ refreshToken: currentRefreshToken })
 });`,
     python: `import requests
 res = requests.post(
-    "http://localhost:8080/api/v1/auth/refresh",
+    "`+BASE_URL+`/api/v1/auth/refresh",
     json={"refreshToken": current_refresh_token}
 )`,
     responseStatus: 200,
@@ -154,15 +157,15 @@ res = requests.post(
     title: "Identidad del Estudiante (Stateless /me)",
     description: "Valida el token Bearer en memoria e inspecciona el perfil de forma inmediata sin consultar a Keycloak.",
     headers: { "Authorization": "Bearer <TOKEN_JWT>" },
-    curl: `curl -X GET "http://localhost:8080/api/v1/auth/me" \\
+    curl: `curl -X GET "`+BASE_URL+`/api/v1/auth/me" \\
   -H "Authorization: Bearer \${SYNCUTP_JWT}"`,
-    typescript: `const res = await fetch("http://localhost:8080/api/v1/auth/me", {
+    typescript: `const res = await fetch("`+BASE_URL+`/api/v1/auth/me", {
   headers: { "Authorization": \`Bearer \${token}\` }
 });
 const { data: profile } = await res.json();`,
     python: `import requests
 res = requests.get(
-    "http://localhost:8080/api/v1/auth/me",
+    "`+BASE_URL+`/api/v1/auth/me",
     headers={"Authorization": f"Bearer {token}"}
 )
 profile = res.json()["data"]`,
@@ -188,14 +191,14 @@ profile = res.json()["data"]`,
     title: "Horario Semanal con Aulas y Docentes",
     description: "Retorna el intervalo de horario con sesiones por día, cursos matriculados, aulas físicas o Zoom y docentes.",
     headers: { "Authorization": "Bearer <TOKEN_JWT>" },
-    curl: `curl -X GET "http://localhost:8080/api/v1/schedule?period=2026+-+Ciclo+2+Agosto" \\
+    curl: `curl -X GET "`+BASE_URL+`/api/v1/schedule?period=2026+-+Ciclo+2+Agosto" \\
   -H "Authorization: Bearer \${SYNCUTP_JWT}"`,
-    typescript: `const res = await fetch("http://localhost:8080/api/v1/schedule", {
+    typescript: `const res = await fetch("`+BASE_URL+`/api/v1/schedule", {
   headers: { "Authorization": \`Bearer \${token}\` }
 });
 const { data: schedule } = await res.json();`,
     python: `import requests
-res = requests.get("http://localhost:8080/api/v1/schedule", headers={"Authorization": f"Bearer {token}"})
+res = requests.get("`+BASE_URL+`/api/v1/schedule", headers={"Authorization": f"Bearer {token}"})
 schedule = res.json()["data"]`,
     responseStatus: 200,
     responseContentType: "application/json",
@@ -228,15 +231,15 @@ schedule = res.json()["data"]`,
     title: "Exportación RFC 5545 iCalendar (.ics)",
     description: "Genera el feed iCalendar estándar para suscripción directa en Google Calendar, Apple Calendar o Microsoft Outlook.",
     headers: { "Authorization": "Bearer <TOKEN_JWT>" },
-    curl: `curl -X GET "http://localhost:8080/api/v1/schedule/export.ics" \\
+    curl: `curl -X GET "`+BASE_URL+`/api/v1/schedule/export.ics" \\
   -H "Authorization: Bearer \${SYNCUTP_JWT}" \\
   -o "horario_utp.ics"`,
-    typescript: `const res = await fetch("http://localhost:8080/api/v1/schedule/export.ics", {
+    typescript: `const res = await fetch("`+BASE_URL+`/api/v1/schedule/export.ics", {
   headers: { "Authorization": \`Bearer \${token}\` }
 });
 const icsText = await res.text();`,
     python: `import requests
-res = requests.get("http://localhost:8080/api/v1/schedule/export.ics", headers={"Authorization": f"Bearer {token}"})
+res = requests.get("`+BASE_URL+`/api/v1/schedule/export.ics", headers={"Authorization": f"Bearer {token}"})
 with open("horario.ics", "w", encoding="utf-8") as f:
     f.write(res.text)`,
     responseStatus: 200,
@@ -263,14 +266,14 @@ END:VCALENDAR`,
     title: "Resumen Oficial de Cursos y Notas (Portal UTP)",
     description: "Consulta la operación GraphQL GetCourseSummary del portal UTP para obtener calificaciones parciales y la fórmula rectora del ciclo.",
     headers: { "Authorization": "Bearer <TOKEN_JWT>" },
-    curl: `curl -X GET "http://localhost:8080/api/v1/courses/summary?periodId=2263" \\
+    curl: `curl -X GET "`+BASE_URL+`/api/v1/courses/summary?periodId=2263" \\
   -H "Authorization: Bearer \${SYNCUTP_JWT}"`,
-    typescript: `const res = await fetch("http://localhost:8080/api/v1/courses/summary?periodId=2263", {
+    typescript: `const res = await fetch("`+BASE_URL+`/api/v1/courses/summary?periodId=2263", {
   headers: { "Authorization": \`Bearer \${token}\` }
 });
 const summary = await res.json();`,
     python: `import requests
-res = requests.get("http://localhost:8080/api/v1/courses/summary?periodId=2263", headers={"Authorization": f"Bearer {token}"})
+res = requests.get("`+BASE_URL+`/api/v1/courses/summary?periodId=2263", headers={"Authorization": f"Bearer {token}"})
 summary = res.json()["data"]`,
     responseStatus: 200,
     responseContentType: "application/json",
@@ -304,14 +307,14 @@ summary = res.json()["data"]`,
     title: "Simular Nota Requerida por Curso",
     description: "Calcula el acumulado actual según la fórmula oficial del curso y proyecta la nota mínima necesaria en las evaluaciones pendientes para aprobar.",
     headers: { "Authorization": "Bearer <TOKEN_JWT>" },
-    curl: `curl -X GET "http://localhost:8080/api/v1/courses/100000I04N/simulator?targetGrade=12.0" \\
+    curl: `curl -X GET "`+BASE_URL+`/api/v1/courses/100000I04N/simulator?targetGrade=12.0" \\
   -H "Authorization: Bearer \${SYNCUTP_JWT}"`,
-    typescript: `const res = await fetch("http://localhost:8080/api/v1/courses/100000I04N/simulator?targetGrade=12.0", {
+    typescript: `const res = await fetch("`+BASE_URL+`/api/v1/courses/100000I04N/simulator?targetGrade=12.0", {
   headers: { "Authorization": \`Bearer \${token}\` }
 });
 const { data: simulation } = await res.json();`,
     python: `import requests
-res = requests.get("http://localhost:8080/api/v1/courses/100000I04N/simulator?targetGrade=12.0", headers={"Authorization": f"Bearer {token}"})
+res = requests.get("`+BASE_URL+`/api/v1/courses/100000I04N/simulator?targetGrade=12.0", headers={"Authorization": f"Bearer {token}"})
 sim = res.json()["data"]`,
     responseStatus: 200,
     responseContentType: "application/json",
@@ -340,14 +343,14 @@ sim = res.json()["data"]`,
     title: "Simular Notas de Todos los Cursos Matriculados",
     description: "Proyecta en paralelo para cada curso del ciclo las evaluaciones pendientes, acumulados y promedios necesarios para aprobar.",
     headers: { "Authorization": "Bearer <TOKEN_JWT>" },
-    curl: `curl -X GET "http://localhost:8080/api/v1/courses/simulator?targetGrade=12.0" \\
+    curl: `curl -X GET "`+BASE_URL+`/api/v1/courses/simulator?targetGrade=12.0" \\
   -H "Authorization: Bearer \${SYNCUTP_JWT}"`,
-    typescript: `const res = await fetch("http://localhost:8080/api/v1/courses/simulator?targetGrade=12.0", {
+    typescript: `const res = await fetch("`+BASE_URL+`/api/v1/courses/simulator?targetGrade=12.0", {
   headers: { "Authorization": \`Bearer \${token}\` }
 });
 const { data: allSimulations } = await res.json();`,
     python: `import requests
-res = requests.get("http://localhost:8080/api/v1/courses/simulator?targetGrade=12.0", headers={"Authorization": f"Bearer {token}"})
+res = requests.get("`+BASE_URL+`/api/v1/courses/simulator?targetGrade=12.0", headers={"Authorization": f"Bearer {token}"})
 sims = res.json()["data"]`,
     responseStatus: 200,
     responseContentType: "application/json",
@@ -370,14 +373,14 @@ sims = res.json()["data"]`,
     title: "Calendario Unificado de Actividades (Canvas LMS)",
     description: "Obtiene todas las actividades (foros, tareas, prácticas) programadas en el periodo con sus estados y filtros de semana.",
     headers: { "Authorization": "Bearer <TOKEN_JWT>" },
-    curl: `curl -X GET "http://localhost:8080/api/v1/tasks/activities?status=PENDING&onlyGraded=true" \\
+    curl: `curl -X GET "`+BASE_URL+`/api/v1/tasks/activities?status=PENDING&onlyGraded=true" \\
   -H "Authorization: Bearer \${SYNCUTP_JWT}"`,
-    typescript: `const res = await fetch("http://localhost:8080/api/v1/tasks/activities?status=PENDING&onlyGraded=true", {
+    typescript: `const res = await fetch("`+BASE_URL+`/api/v1/tasks/activities?status=PENDING&onlyGraded=true", {
   headers: { "Authorization": \`Bearer \${token}\` }
 });
 const { data: activities } = await res.json();`,
     python: `import requests
-res = requests.get("http://localhost:8080/api/v1/tasks/activities?status=PENDING&onlyGraded=true", headers={"Authorization": f"Bearer {token}"})
+res = requests.get("`+BASE_URL+`/api/v1/tasks/activities?status=PENDING&onlyGraded=true", headers={"Authorization": f"Bearer {token}"})
 activities = res.json()["data"]`,
     responseStatus: 200,
     responseContentType: "application/json",
@@ -406,14 +409,14 @@ activities = res.json()["data"]`,
     title: "Detalle de Tarea con Rúbrica Multinivel",
     description: "Retorna la consigna en Markdown, formato de entrega, intentos permitidos y rúbrica completa con puntajes por criterio.",
     headers: { "Authorization": "Bearer <TOKEN_JWT>" },
-    curl: `curl -X GET "http://localhost:8080/api/v1/tasks/7eddf3c8-98eb-5d6e-a295-856ce4ee6c3c/0c621204-1014-59be-aece-5664fb6e32a0" \\
+    curl: `curl -X GET "`+BASE_URL+`/api/v1/tasks/7eddf3c8-98eb-5d6e-a295-856ce4ee6c3c/0c621204-1014-59be-aece-5664fb6e32a0" \\
   -H "Authorization: Bearer \${SYNCUTP_JWT}"`,
-    typescript: `const res = await fetch("http://localhost:8080/api/v1/tasks/7eddf3c8-98eb-5d6e-a295-856ce4ee6c3c/0c621204-1014-59be-aece-5664fb6e32a0", {
+    typescript: `const res = await fetch("`+BASE_URL+`/api/v1/tasks/7eddf3c8-98eb-5d6e-a295-856ce4ee6c3c/0c621204-1014-59be-aece-5664fb6e32a0", {
   headers: { "Authorization": \`Bearer \${token}\` }
 });
 const { data: taskDetail } = await res.json();`,
     python: `import requests
-res = requests.get("http://localhost:8080/api/v1/tasks/7eddf3c8.../0c621204...", headers={"Authorization": f"Bearer {token}"})
+res = requests.get("`+BASE_URL+`/api/v1/tasks/7eddf3c8.../0c621204...", headers={"Authorization": f"Bearer {token}"})
 task = res.json()["data"]`,
     responseStatus: 200,
     responseContentType: "application/json",
@@ -443,14 +446,14 @@ task = res.json()["data"]`,
     title: "Próximas Evaluaciones Ponderadas",
     description: "Filtra cronológicamente las próximas evaluaciones de todos los cursos que impactan el promedio final ponderado.",
     headers: { "Authorization": "Bearer <TOKEN_JWT>" },
-    curl: `curl -X GET "http://localhost:8080/api/v1/tasks/upcoming?limit=5" \\
+    curl: `curl -X GET "`+BASE_URL+`/api/v1/tasks/upcoming?limit=5" \\
   -H "Authorization: Bearer \${SYNCUTP_JWT}"`,
-    typescript: `const res = await fetch("http://localhost:8080/api/v1/tasks/upcoming?limit=5", {
+    typescript: `const res = await fetch("`+BASE_URL+`/api/v1/tasks/upcoming?limit=5", {
   headers: { "Authorization": \`Bearer \${token}\` }
 });
 const { data: upcoming } = await res.json();`,
     python: `import requests
-res = requests.get("http://localhost:8080/api/v1/tasks/upcoming?limit=5", headers={"Authorization": f"Bearer {token}"})
+res = requests.get("`+BASE_URL+`/api/v1/tasks/upcoming?limit=5", headers={"Authorization": f"Bearer {token}"})
 upcoming = res.json()["data"]`,
     responseStatus: 200,
     responseContentType: "application/json",
