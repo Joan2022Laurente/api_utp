@@ -49,7 +49,7 @@ F\xf3rmula Oficial: Promedio = (PC1 * 0.15) + (PC2 * 0.20) + (EP * 0.25) + (TF *
 | PC1 | Sem 04 | 15% | B\xfasqueda no informada y heur\xedsticas |
 | PC2 | Sem 08 | 20% | Algoritmos gen\xe9ticos y juegos |
 | EP  | Sem 10 | 25% | Examen Parcial Te\xf3rico-Pr\xe1ctico |
-| TF  | Sem 18 | 40% | Proyecto Aplicado con LLM / Red Neuronal |`},{id:"auth-login",category:"AUTH",method:"POST",path:"/api/v1/auth/login",title:"Inicio de Sesión Institucional (Keycloak SSO)",description:"Autentica al estudiante con su código y contraseña UTP contra el SSO Keycloak institucional. Retorna perfil y par de tokens.",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:"U20215894",password:"••••••••"},null,2),curl:`# Reemplaza U20XXXXXX con tu c\xf3digo UTP real
+| TF  | Sem 18 | 40% | Proyecto Aplicado con LLM / Red Neuronal |`},{id:"auth-login",category:"AUTH",method:"POST",path:"/api/v1/auth/login",title:"Inicio de Sesión Institucional (Keycloak SSO)",description:"Autentica al estudiante con su código y contraseña UTP contra el SSO Keycloak institucional. Retorna perfil y par de tokens.",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:"U20XXXXXX",password:"••••••••"},null,2),curl:`# Reemplaza U20XXXXXX con tu c\xf3digo UTP real
 TOKEN=$(curl -s -X POST "`+o+`/api/v1/auth/login" \\
   -H "Content-Type: application/json" \\
   -d '{"username": "U20XXXXXX", "password": "tu_password"}' \\
@@ -74,9 +74,9 @@ refresh_token = data["refreshToken"]  # para renovar sin relogin`,responseStatus
   "success": true,
   "message": "Autenticaci\xf3n exitosa",
   "data": {
-    "id": "U20215894",
-    "studentCode": "U20215894",
-    "fullName": "JOAN LAURENTE",
+    "id": "U20XXXXXX",
+    "studentCode": "U20XXXXXX",
+    "fullName": "NOMBRE APELLIDO",
     "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
     "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
     "expiresInMs": 86400000
@@ -100,7 +100,7 @@ new_token = res.json()["data"]["token"]`,responseStatus:200,responseContentType:
   "success": true,
   "message": "Sesi\xf3n renovada exitosamente",
   "data": {
-    "studentCode": "U20215894",
+    "studentCode": "U20XXXXXX",
     "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.new...",
     "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.new..."
   }
@@ -121,8 +121,8 @@ print(profile["studentCode"], profile["fullName"])`,responseStatus:200,responseC
   "success": true,
   "message": "Sesi\xf3n v\xe1lida",
   "data": {
-    "studentCode": "U20215894",
-    "fullName": "JOAN LAURENTE",
+    "studentCode": "U20XXXXXX",
+    "fullName": "NOMBRE APELLIDO",
     "roles": ["STUDENT"]
   }
 }`},{id:"schedule-get",category:"HORARIO",method:"GET",path:"/api/v1/schedule",title:"Horario Semanal con Aulas y Docentes",description:"Retorna el intervalo de horario con sesiones por día, cursos matriculados, aulas físicas o Zoom y docentes.",headers:{Authorization:"Bearer <TOKEN_JWT>"},curl:`# $TOKEN obtenido desde /auth/login
@@ -143,7 +143,7 @@ for s in schedule["sessions"]:
     print(s["dayOfWeek"], s["startTime"], s["courseName"], s["room"])`,responseStatus:200,responseContentType:"application/json",responseBody:`{
   "success": true,
   "data": {
-    "studentId": "U20215894",
+    "studentId": "U20XXXXXX",
     "period": "2026 - Ciclo 2 Agosto",
     "sessions": [
       {

@@ -103,7 +103,7 @@ Fórmula Oficial: Promedio = (PC1 * 0.15) + (PC2 * 0.20) + (EP * 0.25) + (TF * 0
     title: "Inicio de Sesión Institucional (Keycloak SSO)",
     description: "Autentica al estudiante con su código y contraseña UTP contra el SSO Keycloak institucional. Retorna perfil y par de tokens.",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username: "U20215894", password: "••••••••" }, null, 2),
+    body: JSON.stringify({ username: "U20XXXXXX", password: "••••••••" }, null, 2),
     curl: `# Reemplaza U20XXXXXX con tu código UTP real
 TOKEN=$(curl -s -X POST "`+BASE_URL+`/api/v1/auth/login" \\
   -H "Content-Type: application/json" \\
@@ -134,9 +134,9 @@ refresh_token = data["refreshToken"]  # para renovar sin relogin`,
   "success": true,
   "message": "Autenticación exitosa",
   "data": {
-    "id": "U20215894",
-    "studentCode": "U20215894",
-    "fullName": "JOAN LAURENTE",
+    "id": "U20XXXXXX",
+    "studentCode": "U20XXXXXX",
+    "fullName": "NOMBRE APELLIDO",
     "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
     "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
     "expiresInMs": 86400000
@@ -177,7 +177,7 @@ new_token = res.json()["data"]["token"]`,
   "success": true,
   "message": "Sesión renovada exitosamente",
   "data": {
-    "studentCode": "U20215894",
+    "studentCode": "U20XXXXXX",
     "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.new...",
     "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.new..."
   }
@@ -215,8 +215,8 @@ print(profile["studentCode"], profile["fullName"])`,
   "success": true,
   "message": "Sesión válida",
   "data": {
-    "studentCode": "U20215894",
-    "fullName": "JOAN LAURENTE",
+    "studentCode": "U20XXXXXX",
+    "fullName": "NOMBRE APELLIDO",
     "roles": ["STUDENT"]
   }
 }`,
@@ -254,7 +254,7 @@ for s in schedule["sessions"]:
     responseBody: `{
   "success": true,
   "data": {
-    "studentId": "U20215894",
+    "studentId": "U20XXXXXX",
     "period": "2026 - Ciclo 2 Agosto",
     "sessions": [
       {
