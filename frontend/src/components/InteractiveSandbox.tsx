@@ -35,22 +35,45 @@ const allEndpoints: SandboxEndpoint[] = [
     title: "Sílabo Limpio para LLMs (Token-Saver)",
     description: "Retorna el contenido curricular formateado en Markdown depurado, eliminando ruido institucional y listo para alimentar agentes de IA.",
     headers: { "Authorization": "Bearer <TOKEN_JWT>", "Accept": "text/markdown" },
-    curl: `curl -X GET "`+BASE_URL+`/api/v1/syllabus/100000I04N/markdown" \\
-  -H "Authorization: Bearer \${SYNCUTP_JWT}" \\
+    curl: `# Paso 1: obtén tu token (reemplaza con tus credenciales UTP)
+TOKEN=$(curl -s -X POST "`+BASE_URL+`/api/v1/auth/login" \\
+  -H "Content-Type: application/json" \\
+  -d '{"username": "U20XXXXXX", "password": "tu_password"}' \\
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['token'])")
+
+# Paso 2: usa el token para obtener el sílabo en Markdown
+curl -X GET "`+BASE_URL+`/api/v1/syllabus/100000I04N/markdown" \\
+  -H "Authorization: Bearer $TOKEN" \\
   -H "Accept: text/markdown"`,
-    typescript: `const response = await fetch("`+BASE_URL+`/api/v1/syllabus/100000I04N/markdown", {
-  headers: {
-    "Authorization": \`Bearer \${token}\`,
-    "Accept": "text/markdown"
-  }
+    typescript: `// Paso 1: login para obtener token
+const loginRes = await fetch("`+BASE_URL+`/api/v1/auth/login", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ username: "U20XXXXXX", password: "tu_password" })
 });
-const markdownSyllabus = await response.text();`,
+const { data: { token } } = await loginRes.json();
+
+// Paso 2: obtener sílabo en Markdown
+const response = await fetch("`+BASE_URL+`/api/v1/syllabus/100000I04N/markdown", {
+  headers: { "Authorization": \`Bearer \${token}\`, "Accept": "text/markdown" }
+});
+const markdownSyllabus = await response.text();
+console.log(markdownSyllabus); // texto .md listo para pasar a un LLM`,
     python: `import requests
+
+# Paso 1: login
+login = requests.post(
+    "`+BASE_URL+`/api/v1/auth/login",
+    json={"username": "U20XXXXXX", "password": "tu_password"}
+)
+token = login.json()["data"]["token"]
+
+# Paso 2: sílabo en Markdown
 res = requests.get(
     "`+BASE_URL+`/api/v1/syllabus/100000I04N/markdown",
     headers={"Authorization": f"Bearer {token}", "Accept": "text/markdown"}
 )
-clean_md = res.text`,
+print(res.text)  # Markdown limpio listo para RAG/LLM`,
     responseStatus: 200,
     responseContentType: "text/markdown; charset=UTF-8",
     responseBody: `# SÍLABO: INTELIGENCIA ARTIFICIAL (100000I04N)
@@ -81,22 +104,30 @@ Fórmula Oficial: Promedio = (PC1 * 0.15) + (PC2 * 0.20) + (EP * 0.25) + (TF * 0
     description: "Autentica al estudiante con su código y contraseña UTP contra el SSO Keycloak institucional. Retorna perfil y par de tokens.",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username: "U20215894", password: "••••••••" }, null, 2),
-    curl: `curl -X POST "`+BASE_URL+`/api/v1/auth/login" \\
+    curl: `# Reemplaza U20XXXXXX con tu código UTP real
+TOKEN=$(curl -s -X POST "`+BASE_URL+`/api/v1/auth/login" \\
   -H "Content-Type: application/json" \\
-  -d '{"username": "U20215894", "password": "tu_password"}'`,
+  -d '{"username": "U20XXXXXX", "password": "tu_password"}' \\
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['token'])")
+
+echo $TOKEN  # guarda este valor para los demás endpoints`,
     typescript: `const res = await fetch("`+BASE_URL+`/api/v1/auth/login", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ username: "U20215894", password: "tu_password" })
+  body: JSON.stringify({ username: "U20XXXXXX", password: "tu_password" })
 });
 const { data } = await res.json();
-console.log("Tokens recibidos:", data.token, data.refreshToken);`,
+const token = data.token;          // access_token JWT
+const refreshToken = data.refreshToken; // para renovar sin relogin`,
     python: `import requests
+
 res = requests.post(
     "`+BASE_URL+`/api/v1/auth/login",
-    json={"username": "U20215894", "password": "tu_password"}
+    json={"username": "U20XXXXXX", "password": "tu_password"}
 )
-data = res.json()["data"]`,
+data = res.json()["data"]
+token = data["token"]           # access_token JWT
+refresh_token = data["refreshToken"]  # para renovar sin relogin`,
     responseStatus: 200,
     responseContentType: "application/json",
     responseBody: `{
@@ -122,19 +153,24 @@ data = res.json()["data"]`,
     title: "Renovar Sesión (Refresh Token)",
     description: "Obtiene un nuevo access_token y refresh_token usando el refresh token sin reingresar credenciales.",
     headers: { "Content-Type": "application/json" },
-    curl: `curl -X POST "`+BASE_URL+`/api/v1/auth/refresh" \\
+    curl: `# Usa el refreshToken obtenido en /auth/login
+curl -X POST "`+BASE_URL+`/api/v1/auth/refresh" \\
   -H "Content-Type: application/json" \\
-  -d '{"refreshToken": "eyJhbGciOiJIUzI1Ni..."}'`,
-    typescript: `const res = await fetch("`+BASE_URL+`/api/v1/auth/refresh", {
+  -d "{\"refreshToken\": \"$REFRESH_TOKEN\"}"`,
+    typescript: `// refreshToken obtenido previamente en /auth/login
+const res = await fetch("`+BASE_URL+`/api/v1/auth/refresh", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ refreshToken: currentRefreshToken })
-});`,
-    python: `import requests
+  body: JSON.stringify({ refreshToken })
+});
+const { data } = await res.json();
+const newToken = data.token; // nuevo access_token`,
+    python: `# refresh_token obtenido previamente en /auth/login
 res = requests.post(
     "`+BASE_URL+`/api/v1/auth/refresh",
-    json={"refreshToken": current_refresh_token}
-)`,
+    json={"refreshToken": refresh_token}
+)
+new_token = res.json()["data"]["token"]`,
     responseStatus: 200,
     responseContentType: "application/json",
     responseBody: `{
@@ -157,18 +193,22 @@ res = requests.post(
     title: "Identidad del Estudiante (Stateless /me)",
     description: "Valida el token Bearer en memoria e inspecciona el perfil de forma inmediata sin consultar a Keycloak.",
     headers: { "Authorization": "Bearer <TOKEN_JWT>" },
-    curl: `curl -X GET "`+BASE_URL+`/api/v1/auth/me" \\
-  -H "Authorization: Bearer \${SYNCUTP_JWT}"`,
-    typescript: `const res = await fetch("`+BASE_URL+`/api/v1/auth/me", {
+    curl: `# $TOKEN obtenido desde /auth/login
+curl -X GET "`+BASE_URL+`/api/v1/auth/me" \\
+  -H "Authorization: Bearer $TOKEN"`,
+    typescript: `// token obtenido desde /auth/login
+const res = await fetch("`+BASE_URL+`/api/v1/auth/me", {
   headers: { "Authorization": \`Bearer \${token}\` }
 });
-const { data: profile } = await res.json();`,
-    python: `import requests
+const { data: profile } = await res.json();
+console.log(profile.studentCode, profile.fullName);`,
+    python: `# token obtenido desde /auth/login
 res = requests.get(
     "`+BASE_URL+`/api/v1/auth/me",
     headers={"Authorization": f"Bearer {token}"}
 )
-profile = res.json()["data"]`,
+profile = res.json()["data"]
+print(profile["studentCode"], profile["fullName"])`,
     responseStatus: 200,
     responseContentType: "application/json",
     responseBody: `{
@@ -191,15 +231,24 @@ profile = res.json()["data"]`,
     title: "Horario Semanal con Aulas y Docentes",
     description: "Retorna el intervalo de horario con sesiones por día, cursos matriculados, aulas físicas o Zoom y docentes.",
     headers: { "Authorization": "Bearer <TOKEN_JWT>" },
-    curl: `curl -X GET "`+BASE_URL+`/api/v1/schedule?period=2026+-+Ciclo+2+Agosto" \\
-  -H "Authorization: Bearer \${SYNCUTP_JWT}"`,
-    typescript: `const res = await fetch("`+BASE_URL+`/api/v1/schedule", {
+    curl: `# $TOKEN obtenido desde /auth/login
+# Si omites ?period, retorna el ciclo vigente automáticamente
+curl -X GET "`+BASE_URL+`/api/v1/schedule" \\
+  -H "Authorization: Bearer $TOKEN"`,
+    typescript: `// token obtenido desde /auth/login
+const res = await fetch("`+BASE_URL+`/api/v1/schedule", {
   headers: { "Authorization": \`Bearer \${token}\` }
 });
-const { data: schedule } = await res.json();`,
-    python: `import requests
-res = requests.get("`+BASE_URL+`/api/v1/schedule", headers={"Authorization": f"Bearer {token}"})
-schedule = res.json()["data"]`,
+const { data: schedule } = await res.json();
+console.log(schedule.sessions); // array de sesiones con aula y docente`,
+    python: `# token obtenido desde /auth/login
+res = requests.get(
+    "`+BASE_URL+`/api/v1/schedule",
+    headers={"Authorization": f"Bearer {token}"}
+)
+schedule = res.json()["data"]
+for s in schedule["sessions"]:
+    print(s["dayOfWeek"], s["startTime"], s["courseName"], s["room"])`,
     responseStatus: 200,
     responseContentType: "application/json",
     responseBody: `{
@@ -231,17 +280,31 @@ schedule = res.json()["data"]`,
     title: "Exportación RFC 5545 iCalendar (.ics)",
     description: "Genera el feed iCalendar estándar para suscripción directa en Google Calendar, Apple Calendar o Microsoft Outlook.",
     headers: { "Authorization": "Bearer <TOKEN_JWT>" },
-    curl: `curl -X GET "`+BASE_URL+`/api/v1/schedule/export.ics" \\
-  -H "Authorization: Bearer \${SYNCUTP_JWT}" \\
-  -o "horario_utp.ics"`,
-    typescript: `const res = await fetch("`+BASE_URL+`/api/v1/schedule/export.ics", {
+    curl: `# $TOKEN obtenido desde /auth/login
+# -o descarga el archivo directamente
+curl -X GET "`+BASE_URL+`/api/v1/schedule/export.ics" \\
+  -H "Authorization: Bearer $TOKEN" \\
+  -o "horario_utp.ics"
+
+# Luego abre horario_utp.ics con Google/Apple/Outlook Calendar`,
+    typescript: `// token obtenido desde /auth/login
+const res = await fetch("`+BASE_URL+`/api/v1/schedule/export.ics", {
   headers: { "Authorization": \`Bearer \${token}\` }
 });
-const icsText = await res.text();`,
-    python: `import requests
-res = requests.get("`+BASE_URL+`/api/v1/schedule/export.ics", headers={"Authorization": f"Bearer {token}"})
-with open("horario.ics", "w", encoding="utf-8") as f:
-    f.write(res.text)`,
+const icsText = await res.text();
+// Descargar en el browser:
+const blob = new Blob([icsText], { type: "text/calendar" });
+const url = URL.createObjectURL(blob);
+const a = Object.assign(document.createElement("a"), { href: url, download: "horario.ics" });
+a.click();`,
+    python: `# token obtenido desde /auth/login
+res = requests.get(
+    "`+BASE_URL+`/api/v1/schedule/export.ics",
+    headers={"Authorization": f"Bearer {token}"}
+)
+with open("horario_utp.ics", "w", encoding="utf-8") as f:
+    f.write(res.text)
+print("Archivo guardado: horario_utp.ics")`,
     responseStatus: 200,
     responseContentType: "text/calendar; charset=utf-8",
     responseBody: `BEGIN:VCALENDAR
@@ -266,15 +329,23 @@ END:VCALENDAR`,
     title: "Resumen Oficial de Cursos y Notas (Portal UTP)",
     description: "Consulta la operación GraphQL GetCourseSummary del portal UTP para obtener calificaciones parciales y la fórmula rectora del ciclo.",
     headers: { "Authorization": "Bearer <TOKEN_JWT>" },
-    curl: `curl -X GET "`+BASE_URL+`/api/v1/courses/summary?periodId=2263" \\
-  -H "Authorization: Bearer \${SYNCUTP_JWT}"`,
-    typescript: `const res = await fetch("`+BASE_URL+`/api/v1/courses/summary?periodId=2263", {
+    curl: `# $TOKEN obtenido desde /auth/login
+# periodId es opcional; sin él retorna el ciclo vigente
+curl -X GET "`+BASE_URL+`/api/v1/courses/summary" \\
+  -H "Authorization: Bearer $TOKEN"`,
+    typescript: `// token obtenido desde /auth/login
+const res = await fetch("`+BASE_URL+`/api/v1/courses/summary", {
   headers: { "Authorization": \`Bearer \${token}\` }
 });
-const summary = await res.json();`,
-    python: `import requests
-res = requests.get("`+BASE_URL+`/api/v1/courses/summary?periodId=2263", headers={"Authorization": f"Bearer {token}"})
-summary = res.json()["data"]`,
+const { data: summary } = await res.json();
+summary.courses.forEach(c => console.log(c.courseName, c.evaluations));`,
+    python: `# token obtenido desde /auth/login
+res = requests.get(
+    "`+BASE_URL+`/api/v1/courses/summary",
+    headers={"Authorization": f"Bearer {token}"}
+)
+for course in res.json()["data"]["courses"]:
+    print(course["courseName"], course["evaluations"])`,
     responseStatus: 200,
     responseContentType: "application/json",
     responseBody: `{
@@ -307,15 +378,23 @@ summary = res.json()["data"]`,
     title: "Simular Nota Requerida por Curso",
     description: "Calcula el acumulado actual según la fórmula oficial del curso y proyecta la nota mínima necesaria en las evaluaciones pendientes para aprobar.",
     headers: { "Authorization": "Bearer <TOKEN_JWT>" },
-    curl: `curl -X GET "`+BASE_URL+`/api/v1/courses/100000I04N/simulator?targetGrade=12.0" \\
-  -H "Authorization: Bearer \${SYNCUTP_JWT}"`,
-    typescript: `const res = await fetch("`+BASE_URL+`/api/v1/courses/100000I04N/simulator?targetGrade=12.0", {
+    curl: `# $TOKEN obtenido desde /auth/login
+# targetGrade=12.0 es la nota mínima para aprobar (puedes cambiarla)
+curl -X GET "`+BASE_URL+`/api/v1/courses/100000I04N/simulator?targetGrade=12.0" \\
+  -H "Authorization: Bearer $TOKEN"`,
+    typescript: `// token obtenido desde /auth/login
+const res = await fetch("`+BASE_URL+`/api/v1/courses/100000I04N/simulator?targetGrade=12.0", {
   headers: { "Authorization": \`Bearer \${token}\` }
 });
-const { data: simulation } = await res.json();`,
-    python: `import requests
-res = requests.get("`+BASE_URL+`/api/v1/courses/100000I04N/simulator?targetGrade=12.0", headers={"Authorization": f"Bearer {token}"})
-sim = res.json()["data"]`,
+const { data: sim } = await res.json();
+console.log(\`Necesitas \${sim.requiredAverageOnRemaining} en las evaluaciones restantes\`);`,
+    python: `# token obtenido desde /auth/login
+res = requests.get(
+    "`+BASE_URL+`/api/v1/courses/100000I04N/simulator?targetGrade=12.0",
+    headers={"Authorization": f"Bearer {token}"}
+)
+sim = res.json()["data"]
+print(f"Nota requerida en restantes: {sim['requiredAverageOnRemaining']}")`,
     responseStatus: 200,
     responseContentType: "application/json",
     responseBody: `{
@@ -343,15 +422,22 @@ sim = res.json()["data"]`,
     title: "Simular Notas de Todos los Cursos Matriculados",
     description: "Proyecta en paralelo para cada curso del ciclo las evaluaciones pendientes, acumulados y promedios necesarios para aprobar.",
     headers: { "Authorization": "Bearer <TOKEN_JWT>" },
-    curl: `curl -X GET "`+BASE_URL+`/api/v1/courses/simulator?targetGrade=12.0" \\
-  -H "Authorization: Bearer \${SYNCUTP_JWT}"`,
-    typescript: `const res = await fetch("`+BASE_URL+`/api/v1/courses/simulator?targetGrade=12.0", {
+    curl: `# $TOKEN obtenido desde /auth/login
+curl -X GET "`+BASE_URL+`/api/v1/courses/simulator?targetGrade=12.0" \\
+  -H "Authorization: Bearer $TOKEN"`,
+    typescript: `// token obtenido desde /auth/login
+const res = await fetch("`+BASE_URL+`/api/v1/courses/simulator?targetGrade=12.0", {
   headers: { "Authorization": \`Bearer \${token}\` }
 });
-const { data: allSimulations } = await res.json();`,
-    python: `import requests
-res = requests.get("`+BASE_URL+`/api/v1/courses/simulator?targetGrade=12.0", headers={"Authorization": f"Bearer {token}"})
-sims = res.json()["data"]`,
+const { data: sims } = await res.json();
+sims.forEach(s => console.log(s.courseName, "→", s.requiredAverageOnRemaining));`,
+    python: `# token obtenido desde /auth/login
+res = requests.get(
+    "`+BASE_URL+`/api/v1/courses/simulator?targetGrade=12.0",
+    headers={"Authorization": f"Bearer {token}"}
+)
+for s in res.json()["data"]:
+    print(s["courseName"], "→", s["requiredAverageOnRemaining"])`,
     responseStatus: 200,
     responseContentType: "application/json",
     responseBody: `{
@@ -373,15 +459,23 @@ sims = res.json()["data"]`,
     title: "Calendario Unificado de Actividades (Canvas LMS)",
     description: "Obtiene todas las actividades (foros, tareas, prácticas) programadas en el periodo con sus estados y filtros de semana.",
     headers: { "Authorization": "Bearer <TOKEN_JWT>" },
-    curl: `curl -X GET "`+BASE_URL+`/api/v1/tasks/activities?status=PENDING&onlyGraded=true" \\
-  -H "Authorization: Bearer \${SYNCUTP_JWT}"`,
-    typescript: `const res = await fetch("`+BASE_URL+`/api/v1/tasks/activities?status=PENDING&onlyGraded=true", {
+    curl: `# $TOKEN obtenido desde /auth/login
+# status: PENDING | SUBMITTED | GRADED | ALL
+curl -X GET "`+BASE_URL+`/api/v1/tasks/activities?status=PENDING&onlyGraded=true" \\
+  -H "Authorization: Bearer $TOKEN"`,
+    typescript: `// token obtenido desde /auth/login
+const res = await fetch("`+BASE_URL+`/api/v1/tasks/activities?status=PENDING&onlyGraded=true", {
   headers: { "Authorization": \`Bearer \${token}\` }
 });
-const { data: activities } = await res.json();`,
-    python: `import requests
-res = requests.get("`+BASE_URL+`/api/v1/tasks/activities?status=PENDING&onlyGraded=true", headers={"Authorization": f"Bearer {token}"})
-activities = res.json()["data"]`,
+const { data: activities } = await res.json();
+activities.forEach(a => console.log(a.title, a.dueDate, a.courseCode));`,
+    python: `# token obtenido desde /auth/login
+res = requests.get(
+    "`+BASE_URL+`/api/v1/tasks/activities?status=PENDING&onlyGraded=true",
+    headers={"Authorization": f"Bearer {token}"}
+)
+for a in res.json()["data"]:
+    print(a["title"], a["dueDate"], a["courseCode"])`,
     responseStatus: 200,
     responseContentType: "application/json",
     responseBody: `{
@@ -409,15 +503,28 @@ activities = res.json()["data"]`,
     title: "Detalle de Tarea con Rúbrica Multinivel",
     description: "Retorna la consigna en Markdown, formato de entrega, intentos permitidos y rúbrica completa con puntajes por criterio.",
     headers: { "Authorization": "Bearer <TOKEN_JWT>" },
-    curl: `curl -X GET "`+BASE_URL+`/api/v1/tasks/7eddf3c8-98eb-5d6e-a295-856ce4ee6c3c/0c621204-1014-59be-aece-5664fb6e32a0" \\
-  -H "Authorization: Bearer \${SYNCUTP_JWT}"`,
-    typescript: `const res = await fetch("`+BASE_URL+`/api/v1/tasks/7eddf3c8-98eb-5d6e-a295-856ce4ee6c3c/0c621204-1014-59be-aece-5664fb6e32a0", {
+    curl: `# courseId y activityId vienen de /api/v1/tasks/activities
+# $TOKEN obtenido desde /auth/login
+curl -X GET "`+BASE_URL+`/api/v1/tasks/{courseId}/{activityId}" \\
+  -H "Authorization: Bearer $TOKEN"`,
+    typescript: `// courseId y activityId vienen de /api/v1/tasks/activities
+// token obtenido desde /auth/login
+const { courseId, activityId } = activities[0]; // ejemplo
+const res = await fetch("`+BASE_URL+`/api/v1/tasks/\${courseId}/\${activityId}", {
   headers: { "Authorization": \`Bearer \${token}\` }
 });
-const { data: taskDetail } = await res.json();`,
-    python: `import requests
-res = requests.get("`+BASE_URL+`/api/v1/tasks/7eddf3c8.../0c621204...", headers={"Authorization": f"Bearer {token}"})
-task = res.json()["data"]`,
+const { data: task } = await res.json();
+console.log(task.title, task.rubric?.criteria);`,
+    python: `# courseId y activityId vienen de /api/v1/tasks/activities
+# token obtenido desde /auth/login
+course_id = activities[0]["courseId"]
+activity_id = activities[0]["activityId"]
+res = requests.get(
+    f"`+BASE_URL+`/api/v1/tasks/{course_id}/{activity_id}",
+    headers={"Authorization": f"Bearer {token}"}
+)
+task = res.json()["data"]
+print(task["title"], [c["name"] for c in task["rubric"]["criteria"]])`,
     responseStatus: 200,
     responseContentType: "application/json",
     responseBody: `{
@@ -446,15 +553,23 @@ task = res.json()["data"]`,
     title: "Próximas Evaluaciones Ponderadas",
     description: "Filtra cronológicamente las próximas evaluaciones de todos los cursos que impactan el promedio final ponderado.",
     headers: { "Authorization": "Bearer <TOKEN_JWT>" },
-    curl: `curl -X GET "`+BASE_URL+`/api/v1/tasks/upcoming?limit=5" \\
-  -H "Authorization: Bearer \${SYNCUTP_JWT}"`,
-    typescript: `const res = await fetch("`+BASE_URL+`/api/v1/tasks/upcoming?limit=5", {
+    curl: `# $TOKEN obtenido desde /auth/login
+# limit=5 retorna las 5 próximas evaluaciones ponderadas
+curl -X GET "`+BASE_URL+`/api/v1/tasks/upcoming?limit=5" \\
+  -H "Authorization: Bearer $TOKEN"`,
+    typescript: `// token obtenido desde /auth/login
+const res = await fetch("`+BASE_URL+`/api/v1/tasks/upcoming?limit=5", {
   headers: { "Authorization": \`Bearer \${token}\` }
 });
-const { data: upcoming } = await res.json();`,
-    python: `import requests
-res = requests.get("`+BASE_URL+`/api/v1/tasks/upcoming?limit=5", headers={"Authorization": f"Bearer {token}"})
-upcoming = res.json()["data"]`,
+const { data: upcoming } = await res.json();
+upcoming.forEach(e => console.log(e.title, e.dueDate, e.weight));`,
+    python: `# token obtenido desde /auth/login
+res = requests.get(
+    "`+BASE_URL+`/api/v1/tasks/upcoming?limit=5",
+    headers={"Authorization": f"Bearer {token}"}
+)
+for e in res.json()["data"]:
+    print(e["title"], e["dueDate"], e["weight"])`,
     responseStatus: 200,
     responseContentType: "application/json",
     responseBody: `{
