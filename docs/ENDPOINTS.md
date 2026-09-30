@@ -1,6 +1,6 @@
-# API Externa UTP - Especificación Técnica de Endpoints
-
-> **Versión:** 1.2.0 (Arquitectura Hexagonal & Pipeline Semántico Adaptativo)  
+# SyncUTP API - Especificación Técnica de Endpoints
+> **Nombre del Sistema:** SyncUTP (Pasarela Académica y Core Rector UTP)  
+> **Versión:** 2.0.0 (Arquitectura Hexagonal & Pipeline Semántico Adaptativo)  
 > **Base URL:** `/api/v1`  
 > **Protocolo:** REST / JSON (UTF-8) & Markdown (`text/markdown`)
 
