@@ -1,4 +1,48 @@
-(globalThis.TURBOPACK||(globalThis.TURBOPACK=[])).push(["object"==typeof document?document.currentScript:void 0,20198,e=>{"use strict";var a=e.i(43476),s=e.i(71645);let t=({text:e,className:s="",arrowDirection:t="curved-down-left"})=>(0,a.jsxs)("div",{className:`hand-annotation ${s}`,"aria-hidden":"true",children:["curved-up-left"===t&&(0,a.jsx)("svg",{width:"46",height:"34",viewBox:"0 0 46 34",fill:"none",xmlns:"http://www.w3.org/2000/svg",children:(0,a.jsx)("path",{d:"M40 30C28 28 12 24 8 10M8 10L14 12M8 10L6 18",stroke:"var(--color-accent)",strokeWidth:"2.2",strokeLinecap:"round",strokeLinejoin:"round"})}),"curved-down-right"===t&&(0,a.jsx)("svg",{width:"48",height:"36",viewBox:"0 0 48 36",fill:"none",xmlns:"http://www.w3.org/2000/svg",children:(0,a.jsx)("path",{d:"M4 6C18 8 36 14 42 28M42 28L36 26M42 28L44 20",stroke:"var(--color-accent)",strokeWidth:"2.2",strokeLinecap:"round",strokeLinejoin:"round"})}),(0,a.jsx)("span",{children:e}),"curved-down-left"===t&&(0,a.jsx)("svg",{width:"50",height:"38",viewBox:"0 0 50 38",fill:"none",xmlns:"http://www.w3.org/2000/svg",children:(0,a.jsx)("path",{d:"M46 6C34 10 18 20 8 32M8 32L16 32M8 32L8 24",stroke:"var(--color-accent)",strokeWidth:"2.2",strokeLinecap:"round",strokeLinejoin:"round"})}),"curved-up-right"===t&&(0,a.jsx)("svg",{width:"44",height:"32",viewBox:"0 0 44 32",fill:"none",xmlns:"http://www.w3.org/2000/svg",children:(0,a.jsx)("path",{d:"M6 28C18 24 30 16 38 6M38 6L32 6M38 6L40 14",stroke:"var(--color-accent)",strokeWidth:"2.2",strokeLinecap:"round",strokeLinejoin:"round"})})]}),o=window.location.origin,r=[{id:"syllabus-markdown",category:"SÍLABO & LLM",method:"GET",path:"/api/v1/syllabus/100000I04N/markdown",title:"Sílabo Limpio para LLMs (Token-Saver)",description:"Retorna el contenido curricular formateado en Markdown depurado, eliminando ruido institucional y listo para alimentar agentes de IA.",headers:{Authorization:"Bearer <TOKEN_JWT>",Accept:"text/markdown"},curl:`# Paso 1: obt\xe9n tu token (reemplaza con tus credenciales UTP)
+(globalThis.TURBOPACK||(globalThis.TURBOPACK=[])).push(["object"==typeof document?document.currentScript:void 0,20198,e=>{"use strict";var a=e.i(43476),s=e.i(71645);let t=({text:e,className:s="",arrowDirection:t="curved-down-left"})=>(0,a.jsxs)("div",{className:`hand-annotation ${s}`,"aria-hidden":"true",children:["curved-up-left"===t&&(0,a.jsx)("svg",{width:"46",height:"34",viewBox:"0 0 46 34",fill:"none",xmlns:"http://www.w3.org/2000/svg",children:(0,a.jsx)("path",{d:"M40 30C28 28 12 24 8 10M8 10L14 12M8 10L6 18",stroke:"var(--color-accent)",strokeWidth:"2.2",strokeLinecap:"round",strokeLinejoin:"round"})}),"curved-down-right"===t&&(0,a.jsx)("svg",{width:"48",height:"36",viewBox:"0 0 48 36",fill:"none",xmlns:"http://www.w3.org/2000/svg",children:(0,a.jsx)("path",{d:"M4 6C18 8 36 14 42 28M42 28L36 26M42 28L44 20",stroke:"var(--color-accent)",strokeWidth:"2.2",strokeLinecap:"round",strokeLinejoin:"round"})}),(0,a.jsx)("span",{children:e}),"curved-down-left"===t&&(0,a.jsx)("svg",{width:"50",height:"38",viewBox:"0 0 50 38",fill:"none",xmlns:"http://www.w3.org/2000/svg",children:(0,a.jsx)("path",{d:"M46 6C34 10 18 20 8 32M8 32L16 32M8 32L8 24",stroke:"var(--color-accent)",strokeWidth:"2.2",strokeLinecap:"round",strokeLinejoin:"round"})}),"curved-up-right"===t&&(0,a.jsx)("svg",{width:"44",height:"32",viewBox:"0 0 44 32",fill:"none",xmlns:"http://www.w3.org/2000/svg",children:(0,a.jsx)("path",{d:"M6 28C18 24 30 16 38 6M38 6L32 6M38 6L40 14",stroke:"var(--color-accent)",strokeWidth:"2.2",strokeLinecap:"round",strokeLinejoin:"round"})})]}),o=window.location.origin,r=[{id:"syllabus-json",category:"SÍLABO & LLM",method:"GET",path:"/api/v1/syllabus/{courseCode}",title:"Sílabo Estructurado en JSON (IA Parser)",description:"Descarga el PDF oficial del sílabo desde S3 de UTP y lo procesa con IA para retornar un objeto JSON estructurado con unidades, evaluaciones ponderadas, fórmula rectora, política de IA y cronograma semanal completo.",headers:{Authorization:"Bearer <TOKEN_JWT>"},curl:`# $TOKEN obtenido desde /auth/login
+# courseCode: c\xf3digo del curso tal como aparece en tu horario
+curl -X GET "`+o+`/api/v1/syllabus/100000I04N" \\
+  -H "Authorization: Bearer $TOKEN"`,typescript:`// token obtenido desde /auth/login
+const res = await fetch("`+o+`/api/v1/syllabus/100000I04N", {
+  headers: { "Authorization": \`Bearer \${token}\` }
+});
+const { data: syllabus } = await res.json();
+console.log(syllabus.formula);        // f\xf3rmula rectora del curso
+console.log(syllabus.evaluations);    // evaluaciones con semana y peso
+console.log(syllabus.weeklySchedule); // cronograma semana a semana`,python:`# token obtenido desde /auth/login
+res = requests.get(
+    "`+o+`/api/v1/syllabus/100000I04N",
+    headers={"Authorization": f"Bearer {token}"}
+)
+syllabus = res.json()["data"]
+print(syllabus["formula"])
+for ev in syllabus["evaluations"]:
+    print(ev["type"], ev["week"], ev["weightPercent"])`,responseStatus:200,responseContentType:"application/json",responseBody:`{
+  "success": true,
+  "data": {
+    "id": "66f1a2b3c4d5e6f7a8b9c0d1",
+    "courseCode": "100000I04N",
+    "courseName": "INTELIGENCIA ARTIFICIAL",
+    "semester": "2026-2",
+    "credits": 4,
+    "modality": "Presencial",
+    "weeklyHours": 6,
+    "careers": ["Ingenier\xeda de Sistemas e Inform\xe1tica"],
+    "learningGoal": "Al finalizar el curso, el estudiante dise\xf1a e implementa modelos de agentes inteligentes y algoritmos de Machine Learning aplicados a problemas reales.",
+    "formula": "(PC1 * 0.15) + (PC2 * 0.20) + (EP * 0.25) + (TF * 0.40)",
+    "evaluations": [
+      { "type": "PC1", "description": "B\xfasqueda no informada y heur\xedsticas", "week": 4, "weightPercent": 15, "modality": "Individual" },
+      { "type": "PC2", "description": "Algoritmos gen\xe9ticos y juegos adversariales", "week": 8, "weightPercent": 20, "modality": "Individual" },
+      { "type": "EP",  "description": "Examen Parcial Te\xf3rico-Pr\xe1ctico", "week": 10, "weightPercent": 25, "modality": "Individual" },
+      { "type": "TF",  "description": "Proyecto Final con LLM o Red Neuronal", "week": null, "weightPercent": 40, "modality": "Grupal" }
+    ],
+    "maxSimilarityPercent": 25,
+    "aiPolicy": "Se permite el uso de IA como asistente de codificaci\xf3n. Queda prohibido el plagio de texto generado sin citar la fuente.",
+    "weeklySchedule": [
+      { "week": 1, "session": 1, "unit": "Unidad 1", "topic": "Introducci\xf3n a la IA y agentes inteligentes", "activities": "Lectura previa cap. 1", "evaluation": null },
+      { "week": 4, "session": 7, "unit": "Unidad 1", "topic": "B\xfasqueda heur\xedstica A*", "activities": "Laboratorio de c\xf3digo", "evaluation": "PC1" }
+    ]
+  }
+}`},{id:"syllabus-markdown",category:"SÍLABO & LLM",method:"GET",path:"/api/v1/syllabus/100000I04N/markdown",title:"Sílabo Limpio para LLMs (Token-Saver)",description:"Retorna el contenido curricular formateado en Markdown depurado, eliminando ruido institucional y listo para alimentar agentes de IA.",headers:{Authorization:"Bearer <TOKEN_JWT>",Accept:"text/markdown"},curl:`# Paso 1: obt\xe9n tu token (reemplaza con tus credenciales UTP)
 TOKEN=$(curl -s -X POST "`+o+`/api/v1/auth/login" \\
   -H "Content-Type: application/json" \\
   -d '{"username": "U20XXXXXX", "password": "tu_password"}' \\

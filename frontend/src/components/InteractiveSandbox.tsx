@@ -26,6 +26,67 @@ interface SandboxEndpoint {
 }
 
 const allEndpoints: SandboxEndpoint[] = [
+  // 0. Syllabus → JSON estructurado por IA
+  {
+    id: "syllabus-json",
+    category: "SÍLABO & LLM",
+    method: "GET",
+    path: "/api/v1/syllabus/{courseCode}",
+    title: "Sílabo Estructurado en JSON (IA Parser)",
+    description: "Descarga el PDF oficial del sílabo desde S3 de UTP y lo procesa con IA para retornar un objeto JSON estructurado con unidades, evaluaciones ponderadas, fórmula rectora, política de IA y cronograma semanal completo.",
+    headers: { "Authorization": "Bearer <TOKEN_JWT>" },
+    curl: `# $TOKEN obtenido desde /auth/login
+# courseCode: código del curso tal como aparece en tu horario
+curl -X GET "`+BASE_URL+`/api/v1/syllabus/100000I04N" \\
+  -H "Authorization: Bearer $TOKEN"`,
+    typescript: `// token obtenido desde /auth/login
+const res = await fetch("`+BASE_URL+`/api/v1/syllabus/100000I04N", {
+  headers: { "Authorization": \`Bearer \${token}\` }
+});
+const { data: syllabus } = await res.json();
+console.log(syllabus.formula);        // fórmula rectora del curso
+console.log(syllabus.evaluations);    // evaluaciones con semana y peso
+console.log(syllabus.weeklySchedule); // cronograma semana a semana`,
+    python: `# token obtenido desde /auth/login
+res = requests.get(
+    "`+BASE_URL+`/api/v1/syllabus/100000I04N",
+    headers={"Authorization": f"Bearer {token}"}
+)
+syllabus = res.json()["data"]
+print(syllabus["formula"])
+for ev in syllabus["evaluations"]:
+    print(ev["type"], ev["week"], ev["weightPercent"])`,
+    responseStatus: 200,
+    responseContentType: "application/json",
+    responseBody: `{
+  "success": true,
+  "data": {
+    "id": "66f1a2b3c4d5e6f7a8b9c0d1",
+    "courseCode": "100000I04N",
+    "courseName": "INTELIGENCIA ARTIFICIAL",
+    "semester": "2026-2",
+    "credits": 4,
+    "modality": "Presencial",
+    "weeklyHours": 6,
+    "careers": ["Ingeniería de Sistemas e Informática"],
+    "learningGoal": "Al finalizar el curso, el estudiante diseña e implementa modelos de agentes inteligentes y algoritmos de Machine Learning aplicados a problemas reales.",
+    "formula": "(PC1 * 0.15) + (PC2 * 0.20) + (EP * 0.25) + (TF * 0.40)",
+    "evaluations": [
+      { "type": "PC1", "description": "Búsqueda no informada y heurísticas", "week": 4, "weightPercent": 15, "modality": "Individual" },
+      { "type": "PC2", "description": "Algoritmos genéticos y juegos adversariales", "week": 8, "weightPercent": 20, "modality": "Individual" },
+      { "type": "EP",  "description": "Examen Parcial Teórico-Práctico", "week": 10, "weightPercent": 25, "modality": "Individual" },
+      { "type": "TF",  "description": "Proyecto Final con LLM o Red Neuronal", "week": null, "weightPercent": 40, "modality": "Grupal" }
+    ],
+    "maxSimilarityPercent": 25,
+    "aiPolicy": "Se permite el uso de IA como asistente de codificación. Queda prohibido el plagio de texto generado sin citar la fuente.",
+    "weeklySchedule": [
+      { "week": 1, "session": 1, "unit": "Unidad 1", "topic": "Introducción a la IA y agentes inteligentes", "activities": "Lectura previa cap. 1", "evaluation": null },
+      { "week": 4, "session": 7, "unit": "Unidad 1", "topic": "Búsqueda heurística A*", "activities": "Laboratorio de código", "evaluation": "PC1" }
+    ]
+  }
+}`,
+  },
+
   // 1. LLM Markdown
   {
     id: "syllabus-markdown",
