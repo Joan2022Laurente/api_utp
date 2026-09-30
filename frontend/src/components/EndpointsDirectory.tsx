@@ -42,8 +42,6 @@ const apiCatalog: DomainGroup[] = [
       { method: "GET", path: "/api/v1/syllabus/{courseCode}/markdown", description: "Sílabo limpio en Markdown para LLMs (ahorra ~70% de tokens vs PDF).", auth: true, format: "Markdown" },
       { method: "GET", path: "/api/v1/syllabus", description: "Lista todos los sílabos matriculados o almacenados del estudiante.", auth: true, format: "JSON" },
       { method: "GET", path: "/api/v1/syllabus/raw-text", description: "Extrae el texto plano crudo directo del PDF del sílabo en S3.", auth: true, format: "JSON" },
-      { method: "POST", path: "/api/v1/syllabus/parse", description: "Parsea y persiste texto de sílabo en base de datos.", auth: false, format: "JSON" },
-      { method: "POST", path: "/api/v1/syllabus/save", description: "Persiste directamente un objeto Syllabus normalizado en Supabase.", auth: false, format: "JSON" },
     ],
   },
   {
@@ -80,7 +78,7 @@ export const EndpointsDirectory: React.FC = () => {
       <div className="section-label">// CATÁLOGO COMPLETO DE RUTAS</div>
       <h2 className="section-title">Directorio Oficial de Endpoints de SyncUTP</h2>
       <p style={{ color: "var(--color-ink-muted)", fontSize: "var(--text-small)", marginBottom: "var(--space-6)", maxWidth: "860px" }}>
-        A continuación se detalla el inventario exhaustivo de las 20 rutas REST/Markdown/iCal activas en el Gateway de SyncUTP, organizadas por dominio funcional.
+        A continuación se detalla el inventario exhaustivo de las rutas REST/Markdown/iCal activas en el Gateway de SyncUTP, organizadas por dominio funcional.
       </p>
 
       <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-6)" }}>

@@ -50,19 +50,6 @@ public class SyllabusController {
         return ResponseEntity.ok(ApiResponse.ok(list));
     }
 
-    @PostMapping("/parse")
-    public ResponseEntity<ApiResponse<Syllabus>> parseSyllabus(
-            @RequestParam String courseCode,
-            @RequestBody String syllabusText) {
-        Syllabus parsed = syllabusServicePort.parseAndSaveSyllabusText(courseCode, syllabusText);
-        return ResponseEntity.ok(ApiResponse.ok("Sílabo procesado correctamente", parsed));
-    }
-
-    @PostMapping("/save")
-    public ResponseEntity<ApiResponse<Syllabus>> saveSyllabus(@RequestBody Syllabus syllabus) {
-        Syllabus saved = syllabusServicePort.saveSyllabus(syllabus);
-        return ResponseEntity.ok(ApiResponse.ok("Sílabo guardado exitosamente en base de datos", saved));
-    }
 
     @GetMapping("/raw-text")
     public ResponseEntity<ApiResponse<String>> getRawText(

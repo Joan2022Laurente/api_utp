@@ -154,18 +154,27 @@ Arquitectura web moderna, Spring Boot y controladores
 
 ---
 
-### 2.3 `POST /syllabus/parse`
-Permite procesar texto sin procesar extraído de un PDF externo o cliente, sanitizarlo, validarlo y persistirlo en base de datos.
+### 2.3 `GET /syllabus`
+Lista todos los sílabos matriculados o almacenados del estudiante autenticado.
 
-- **Método:** `POST`
-- **Ruta:** `/syllabus/parse?courseCode=100000ST61`
-- **Body:** `text/plain` con el texto extraído del PDF.
-- **Respuesta:** `ApiResponse<Syllabus>` estructurado.
+- **Método:** `GET`
+- **Ruta:** `/syllabus`
+- **Headers:** `Authorization: Bearer <token>`
+- **Respuesta:** `ApiResponse<List<Syllabus>>` con los sílabos del periodo.
 
 ---
 
-### 2.4 `POST /syllabus/save`
-Persistencia manual de un objeto `Syllabus`. Valida determinísticamente el payload antes de realizar el upsert en Supabase. Si viola las reglas (~100% pesos, rango semanas), retorna `400 Bad Request`.
+### 2.4 `GET /syllabus/raw-text`
+Extrae el texto plano crudo directo del binario PDF del sílabo alojado en S3 UTP. Útil para tareas de diagnóstico o procesamiento OCR directo.
+
+- **Método:** `GET`
+- **Ruta:** `/syllabus/raw-text?courseCode=100000ST61`
+- **Query Params:**
+  - `courseCode` *(string, requerido)*: Código del curso.
+  - `sectionId` *(string, opcional)*: UUID de sección.
+  - `pdfUrl` *(string, opcional)*: URL directa al PDF.
+- **Headers:** `Authorization: Bearer <token>`
+- **Respuesta:** `ApiResponse<String>` con el volcado de texto plano extraído del PDF.
 
 ---
 

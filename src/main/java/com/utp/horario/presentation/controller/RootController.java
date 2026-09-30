@@ -43,8 +43,6 @@ public class RootController {
                         "GET  /syllabus/{courseCode}",
                         "GET  /syllabus/{courseCode}/markdown",
                         "GET  /syllabus/raw-text",
-                        "POST /syllabus/parse",
-                        "POST /syllabus/save",
                         "GET  /tasks/{sectionId}/{activityId}",
                         "GET  /tasks/activities",
                         "GET  /tasks/upcoming",
