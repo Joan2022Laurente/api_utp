@@ -1089,6 +1089,107 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         return "";
     }
 
+    private final Map<String, String> sectionToCourseCodeCache = new ConcurrentHashMap<>();
+    private final Map<String, String> courseNameToCourseCodeCache = new ConcurrentHashMap<>();
+
+    public String resolveCourseCode(String sectionId, String courseName, String token) {
+        if (sectionId != null && !sectionId.isBlank() && sectionToCourseCodeCache.containsKey(sectionId)) {
+            return sectionToCourseCodeCache.get(sectionId);
+        }
+        if (courseName != null && !courseName.isBlank()) {
+            String norm = normalizeCourseName(courseName);
+            if (courseNameToCourseCodeCache.containsKey(norm)) {
+                return courseNameToCourseCodeCache.get(norm);
+            }
+        }
+
+        // Si no está en caché y tenemos token, consultar dashboard-courses de Class
+        if (token != null && !token.isBlank()) {
+            fetchAndCacheDashboardCourses(token);
+            if (sectionId != null && !sectionId.isBlank() && sectionToCourseCodeCache.containsKey(sectionId)) {
+                return sectionToCourseCodeCache.get(sectionId);
+            }
+            if (courseName != null && !courseName.isBlank()) {
+                String norm = normalizeCourseName(courseName);
+                if (courseNameToCourseCodeCache.containsKey(norm)) {
+                    return courseNameToCourseCodeCache.get(norm);
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private void fetchAndCacheDashboardCourses(String token) {
+        String effectiveToken = (token != null && token.startsWith("Bearer ")) ? token.substring(7).trim() : token;
+        String userId = extractUserIdFromToken(effectiveToken);
+        if (userId == null || userId.isBlank()) return;
+
+        String url = "https://api-pao.utpxpedition.com/learning/student/" + userId + "/dashboard-courses";
+        String tenantId = extractTenantIdFromToken(effectiveToken);
+
+        try {
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(10))
+                    .header("accept", "*/*")
+                    .header("authorization", "Bearer " + effectiveToken)
+                    .header("user-id", userId)
+                    .header("user-role", "STUDENT")
+                    .header("x-tenant-id", tenantId)
+                    .header("origin", "https://class.utp.edu.pe")
+                    .header("referer", "https://class.utp.edu.pe/")
+                    .header("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                    .GET()
+                    .build();
+
+            HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() == 200) {
+                JsonNode root = objectMapper.readTree(resp.body());
+                JsonNode dataNode = root.path("data");
+                if (dataNode.isArray()) {
+                    for (JsonNode cNode : dataNode) {
+                        String sId = cNode.path("sectionId").asText(null);
+                        String cCode = cNode.path("courseCode").asText(null);
+                        String sCode = cNode.path("sectionCode").asText("");
+                        String cName = cNode.path("name").asText(null);
+
+                        if ((cCode == null || cCode.isBlank()) && !sCode.isBlank()) {
+                            Matcher m = Pattern.compile("(?i)(100000[A-Z0-9]{4})").matcher(sCode);
+                            if (m.find()) {
+                                cCode = m.group(1);
+                            }
+                        }
+
+                        if (cCode != null && !cCode.isBlank()) {
+                            if (sId != null && !sId.isBlank()) {
+                                sectionToCourseCodeCache.put(sId, cCode);
+                            }
+                            if (cName != null && !cName.isBlank()) {
+                                courseNameToCourseCodeCache.put(normalizeCourseName(cName), cCode);
+                            }
+                        }
+                    }
+                    log.info("[UtpPortalGatewayAdapter] Dashboard courses sincronizados en caché. Total secciones: {}", sectionToCourseCodeCache.size());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[UtpPortalGatewayAdapter] No se pudo cargar dashboard-courses: {}", e.getMessage());
+        }
+    }
+
+    private String normalizeCourseName(String name) {
+        if (name == null) return "";
+        return name.toUpperCase()
+                .replaceAll("[ÁÀÄÂ]", "A")
+                .replaceAll("[ÉÈËÊ]", "E")
+                .replaceAll("[ÍÌÏÎ]", "I")
+                .replaceAll("[ÓÒÖÔ]", "O")
+                .replaceAll("[ÚÙÜÛ]", "U")
+                .replaceAll("[^A-Z0-9]", "")
+                .trim();
+    }
+
     @Override
     public TaskSpecification fetchTaskSpecification(String sectionId, String activityId, String token) {
         String effectiveToken = (token != null && token.startsWith("Bearer ")) ? token.substring(7).trim() : token;
@@ -1097,6 +1198,8 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
 
         String url = "https://api-pao.utpxpedition.com/course/student/sections/" + sectionId + "/homeworks/" + activityId + "/resume";
         log.info("[UtpPortalGatewayAdapter] Consultando especificación de tarea en: {}", url);
+
+        String resolvedCourseCode = resolveCourseCode(sectionId, null, effectiveToken);
 
         try {
             HttpRequest req = HttpRequest.newBuilder()
@@ -1177,11 +1280,20 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                     }
                 }
 
+                if ((resolvedCourseCode == null || resolvedCourseCode.isBlank()) && rubricName != null) {
+                    Matcher m = Pattern.compile("(?i)^([A-Z0-9]{4})-").matcher(rubricName);
+                    if (m.find()) {
+                        resolvedCourseCode = "100000" + m.group(1).toUpperCase();
+                    }
+                }
+
                 Integer attempts = data.hasNonNull("attempts") ? data.path("attempts").asInt() : 1;
 
                 return TaskSpecification.builder()
                         .id(data.path("id").asText(activityId))
                         .title(data.path("title").asText("Asignación"))
+                        .courseCode(resolvedCourseCode)
+                        .sectionId(sectionId)
                         .descriptionMarkdown(markdownDesc)
                         .deliverablesMarkdown(markdownDeliverables)
                         .maxAttempts(attempts)
@@ -1209,6 +1321,8 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         return TaskSpecification.builder()
                 .id(activityId)
                 .title("Asignación no disponible")
+                .courseCode(resolvedCourseCode)
+                .sectionId(sectionId)
                 .descriptionMarkdown("")
                 .gradingRubric(new ArrayList<>())
                 .submissionTypes(List.of("online_upload"))
@@ -1262,6 +1376,10 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                         String category = calculateCategory(title, type, evalSystem, isQualified);
                         UrgencyInfo urgencyInfo = calculateUrgency(finishAt);
 
+                        String secId = meta.path("sectionId").asText(null);
+                        String cName = meta.path("courseName").asText(null);
+                        String cCode = resolveCourseCode(secId, cName, effectiveToken);
+
                         activities.add(AcademicActivity.builder()
                                 .id(ev.path("id").asText(null))
                                 .title(title)
@@ -1269,9 +1387,10 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                                 .weekNumber(meta.path("weekNumber").asInt(0))
                                 .startAt(ev.path("startAt").asText(null))
                                 .finishAt(finishAt)
-                                .courseName(meta.path("courseName").asText(null))
+                                .courseCode(cCode)
+                                .courseName(cName)
                                 .courseId(meta.path("courseId").asText(null))
-                                .sectionId(meta.path("sectionId").asText(null))
+                                .sectionId(secId)
                                 .contentId(meta.path("contentId").asText(null))
                                 .activityId(meta.path("activityId").asText(null))
                                 .evaluationSystem(evalSystem)

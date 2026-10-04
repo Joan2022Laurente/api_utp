@@ -237,29 +237,45 @@ Genera el calendario descargable en formato estándar RFC 5545 compatible con Go
 ## 5. Endpoints de Tareas y Rúbricas (`/tasks`)
 
 ### 5.1 `GET /tasks/{sectionId}/{activityId}`
-Especificación completa de una tarea con su consigna en Markdown y matriz de rúbrica oficial.
+Especificación completa de una tarea con su consigna en Markdown, matriz de rúbrica oficial, código de curso rector y correlación con el sílabo.
 - **Respuesta:**
   ```json
   {
     "success": true,
     "data": {
-      "activityId": "0c621204-1014-59be-aece-5664fb6e32a0",
+      "id": "0c621204-1014-59be-aece-5664fb6e32a0",
       "title": "Avance de Proyecto Final 1",
-      "instructionsMarkdown": "## Consigna\nDesarrollar la API RESTful...",
-      "maxScore": 20.0,
-      "dueDate": "2026-09-28T23:59:00",
-      "rubric": {
-        "criteria": [
-          {
-            "name": "Arquitectura y Modelado",
-            "weight": 8.0,
-            "levels": [
-              { "name": "Excelente", "points": 8.0, "description": "Aplica Clean Architecture..." },
-              { "name": "En Proceso", "points": 4.0, "description": "Estructura monolítica con acoplamiento..." }
-            ]
-          }
-        ]
-      }
+      "courseCode": "100000ST61",
+      "sectionId": "4853a86a-4e82-5d4f-b14b-10ec8addcc91",
+      "descriptionMarkdown": "## Consigna\nDesarrollar la API RESTful...",
+      "deliverablesMarkdown": "## Formato de Entrega\nSubir repositorio GitHub...",
+      "maxAttempts": 1,
+      "submissionTypes": ["online_upload"],
+      "evaluationTopScore": 20.0,
+      "dueAt": "2026-09-28T23:59:00",
+      "evaluationSystem": "AVANCE DE PROYECTO FINAL 1",
+      "syllabusCorrelation": {
+        "courseCode": "100000ST61",
+        "evaluationType": "APF1",
+        "weightPercent": 20,
+        "evaluationDescription": "AVANCE DE PROYECTO FINAL 1",
+        "syllabusWeek": 5,
+        "syllabusUnit": "Unidad 2",
+        "syllabusTopic": "Controladores REST y Servicios",
+        "isSyllabusMatched": true,
+        "syllabusUrl": "/api/v1/syllabus/100000ST61",
+        "syllabusMarkdownUrl": "/api/v1/syllabus/100000ST61/markdown"
+      },
+      "gradingRubric": [
+        {
+          "name": "Arquitectura y Modelado",
+          "score": 8.0,
+          "levels": [
+            { "name": "Excelente", "score": 8.0, "description": "Aplica Clean Architecture..." },
+            { "name": "En Proceso", "score": 4.0, "description": "Estructura monolítica con acoplamiento..." }
+          ]
+        }
+      ]
     }
   }
   ```

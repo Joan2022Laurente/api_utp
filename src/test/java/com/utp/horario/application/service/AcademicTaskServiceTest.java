@@ -22,21 +22,48 @@ class AcademicTaskServiceTest {
 
     private UtpPortalGatewayPort gatewayPort;
     private com.utp.horario.application.service.formula.GradeSimulatorEngine gradeSimulatorEngine;
+    private com.utp.horario.domain.port.out.SyllabusRepositoryPort syllabusRepositoryPort;
     private AcademicTaskService service;
 
     @BeforeEach
     void setUp() {
         gatewayPort = Mockito.mock(UtpPortalGatewayPort.class);
         gradeSimulatorEngine = new com.utp.horario.application.service.formula.GradeSimulatorEngine();
-        service = new AcademicTaskService(gatewayPort, gradeSimulatorEngine);
+        syllabusRepositoryPort = Mockito.mock(com.utp.horario.domain.port.out.SyllabusRepositoryPort.class);
+        service = new AcademicTaskService(gatewayPort, gradeSimulatorEngine, syllabusRepositoryPort);
     }
 
     @Test
-    @DisplayName("Debe retornar especificación de tarea con rúbrica completa")
+    @DisplayName("Debe retornar especificación de tarea con rúbrica completa y correlación de sílabo")
     void shouldReturnTaskSpecificationCorrectly() {
+        com.utp.horario.domain.model.Syllabus mockSyllabus = com.utp.horario.domain.model.Syllabus.builder()
+                .courseCode("100000S72V")
+                .courseName("HERRAMIENTAS PARA LA COMUNICACIÓN EFECTIVA")
+                .evaluations(List.of(
+                        com.utp.horario.domain.model.SyllabusEvaluation.builder()
+                                .id("AP2")
+                                .type("AP2")
+                                .description("AVANCE DE PORTAFOLIO 2")
+                                .weightPercent(20)
+                                .week(7)
+                                .build()
+                ))
+                .weeklySchedule(List.of(
+                        com.utp.horario.domain.model.SyllabusWeeklySession.builder()
+                                .week(7)
+                                .unit("Unidad 2")
+                                .topic("Herramientas de expresión y comunicación")
+                                .build()
+                ))
+                .build();
+
+        when(syllabusRepositoryPort.findByCourseCode("100000S72V")).thenReturn(java.util.Optional.of(mockSyllabus));
+
         TaskSpecification mockSpec = TaskSpecification.builder()
                 .id("hw-123")
                 .title("Avance de Portafolio 2")
+                .courseCode("100000S72V")
+                .sectionId("sec-1")
                 .descriptionMarkdown("### Consigna de tarea")
                 .maxAttempts(1)
                 .submissionTypes(List.of("online_upload", "online_url"))
@@ -54,8 +81,15 @@ class AcademicTaskServiceTest {
 
         assertNotNull(result);
         assertEquals("hw-123", result.getId());
+        assertEquals("100000S72V", result.getCourseCode());
+        assertEquals("sec-1", result.getSectionId());
         assertEquals(2, result.getGradingRubric().size());
         assertEquals("AVANCE DE PORTAFOLIO 2", result.getEvaluationSystem());
+        assertNotNull(result.getSyllabusCorrelation());
+        assertTrue(result.getSyllabusCorrelation().getIsSyllabusMatched());
+        assertEquals("AP2", result.getSyllabusCorrelation().getEvaluationType());
+        assertEquals(20, result.getSyllabusCorrelation().getWeightPercent());
+        assertEquals("/api/v1/syllabus/100000S72V", result.getSyllabusCorrelation().getSyllabusUrl());
     }
 
     @Test
@@ -179,5 +213,59 @@ class AcademicTaskServiceTest {
         assertEquals(10.67, sim.getRequiredAverageOnPending(), 0.05);
         assertEquals("ACHIEVABLE", sim.getStatus());
         assertFalse(sim.isPassed());
+    }
+
+    @Test
+    @DisplayName("Debe enriquecer actividades del calendario con courseCode y correlación del sílabo")
+    void shouldEnrichActivitiesWithCourseCodeAndSyllabusCorrelation() {
+        com.utp.horario.domain.model.Syllabus mockSyllabus = com.utp.horario.domain.model.Syllabus.builder()
+                .courseCode("100000ST61")
+                .courseName("DESARROLLO WEB INTEGRADO")
+                .evaluations(List.of(
+                        com.utp.horario.domain.model.SyllabusEvaluation.builder()
+                                .id("APF1")
+                                .type("APF1")
+                                .description("AVANCE DE PROYECTO FINAL 1")
+                                .weightPercent(20)
+                                .week(5)
+                                .build()
+                ))
+                .weeklySchedule(List.of(
+                        com.utp.horario.domain.model.SyllabusWeeklySession.builder()
+                                .week(5)
+                                .unit("Unidad 2")
+                                .topic("Controladores REST y Servicios")
+                                .build()
+                ))
+                .build();
+
+        when(syllabusRepositoryPort.findByCourseCode("100000ST61")).thenReturn(java.util.Optional.of(mockSyllabus));
+
+        AcademicActivity activity = AcademicActivity.builder()
+                .id("act-1")
+                .title("Avance de Proyecto Final 1 (APF1)")
+                .courseCode("100000ST61")
+                .courseName("DESARROLLO WEB INTEGRADO")
+                .weekNumber(5)
+                .evaluationSystem("AVANCE DE PROYECTO FINAL 1")
+                .activityType("HOMEWORK")
+                .studentStatus("PENDING")
+                .build();
+
+        when(gatewayPort.fetchCalendarActivities(Mockito.isNull(), Mockito.eq("period"), anyString()))
+                .thenReturn(List.of(activity));
+
+        List<AcademicActivity> results = service.getCalendarActivities(null, "period", "token");
+
+        assertNotNull(results);
+        assertEquals(1, results.size());
+        AcademicActivity result = results.get(0);
+        assertEquals("100000ST61", result.getCourseCode());
+        assertNotNull(result.getSyllabusCorrelation());
+        assertTrue(result.getSyllabusCorrelation().getIsSyllabusMatched());
+        assertEquals("APF1", result.getSyllabusCorrelation().getEvaluationType());
+        assertEquals(20, result.getSyllabusCorrelation().getWeightPercent());
+        assertEquals("Unidad 2", result.getSyllabusCorrelation().getSyllabusUnit());
+        assertEquals("Controladores REST y Servicios", result.getSyllabusCorrelation().getSyllabusTopic());
     }
 }

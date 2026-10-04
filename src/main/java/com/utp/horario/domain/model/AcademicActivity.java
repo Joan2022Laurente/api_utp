@@ -7,7 +7,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 @Getter
-@Builder
+@Builder(toBuilder = true)
 @NoArgsConstructor
 @AllArgsConstructor
 @EqualsAndHashCode(of = "id")
@@ -18,6 +18,7 @@ public class AcademicActivity {
     private Integer weekNumber;
     private String startAt;
     private String finishAt;
+    private String courseCode; // Código oficial rector UTP (ej. 100000S72V)
     private String courseName;
     private String courseId;
     private String sectionId;
@@ -29,4 +30,5 @@ public class AcademicActivity {
     private String classificationCategory; // WEIGHTED_EVALUATION, PRACTICE_HOMEWORK, PARTICIPATION_FORUM, EXAM, GENERAL_ACTIVITY
     private String urgency; // OVERDUE, DUE_TODAY, DUE_THIS_WEEK, UPCOMING, UNKNOWN
     private Long daysRemaining;
+    private SyllabusCorrelation syllabusCorrelation; // Vinculación con el sílabo oficial
 }

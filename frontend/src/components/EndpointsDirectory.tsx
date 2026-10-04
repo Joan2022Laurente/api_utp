@@ -55,11 +55,11 @@ const apiCatalog: DomainGroup[] = [
   },
   {
     domain: "05. Tareas, Evaluaciones & Canvas LMS (/tasks)",
-    description: "Entregas pendientes, rúbricas multinivel y cronograma de evaluaciones.",
+    description: "Entregas pendientes, rúbricas multinivel, código de curso y correlación con el sílabo oficial.",
     endpoints: [
-      { method: "GET", path: "/api/v1/tasks/activities", description: "Calendario unificado de actividades (foros, tareas, prácticas) con filtros de semana y estado.", auth: true, format: "JSON" },
-      { method: "GET", path: "/api/v1/tasks/{sectionId}/{activityId}", description: "Especificación detallada de consigna en Markdown, formato de entrega y rúbrica completa.", auth: true, format: "JSON" },
-      { method: "GET", path: "/api/v1/tasks/upcoming", description: "Filtra cronológicamente las próximas evaluaciones que tienen impacto en el promedio final.", auth: true, format: "JSON" },
+      { method: "GET", path: "/api/v1/tasks/activities", description: "Calendario unificado de actividades con courseCode oficial y vinculación con evaluaciones del sílabo.", auth: true, format: "JSON" },
+      { method: "GET", path: "/api/v1/tasks/{sectionId}/{activityId}", description: "Consigna en Markdown, rúbrica completa, courseCode rector y match con el sílabo oficial.", auth: true, format: "JSON" },
+      { method: "GET", path: "/api/v1/tasks/upcoming", description: "Próximas evaluaciones ponderadas con peso porcentual del sílabo rector y urgencia cronológica.", auth: true, format: "JSON" },
     ],
   },
   {
