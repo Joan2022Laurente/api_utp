@@ -22,6 +22,9 @@ laboratorio/
 .env.*
 *.dump
 
+### Cache local de resolucion paoUserId (se regenera sola) ###
+.pao-user-map.cache.json
+
 ### Frontend ###
 frontend/node_modules/
 frontend/.next/

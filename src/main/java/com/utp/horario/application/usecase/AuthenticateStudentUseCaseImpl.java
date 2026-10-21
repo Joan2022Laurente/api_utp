@@ -1,5 +1,8 @@
 package com.utp.horario.application.usecase;
 
+import com.utp.horario.application.service.security.SessionTokenInspector;
+import com.utp.horario.domain.exception.AuthenticationException;
+import com.utp.horario.domain.exception.ResourceNotFoundException;
 import com.utp.horario.domain.model.StudentProfile;
 import com.utp.horario.domain.port.in.AuthenticateStudentUseCase;
 import com.utp.horario.domain.port.out.StudentRepositoryPort;
@@ -22,54 +25,37 @@ public class AuthenticateStudentUseCaseImpl implements AuthenticateStudentUseCas
         return studentRepositoryPort.save(profile);
     }
 
+    /**
+     * Resuelve la identidad del estudiante a partir del token Bearer presentado.
+     *
+     * <p>El token se inspecciona de forma <b>stateless</b>: no se consulta ni se cede
+     * ninguna sesión guardada en memoria. Un token ausente, malformado o expirado
+     * produce {@link AuthenticationException} (HTTP 401).</p>
+     */
     @Override
     public StudentProfile authenticateWithToken(String token) {
-        if (token != null && token.contains(".")) {
-            try {
-                String[] parts = token.split("\\.");
-                if (parts.length >= 2) {
-                    byte[] decoded = java.util.Base64.getUrlDecoder().decode(parts[1]);
-                    com.fasterxml.jackson.databind.JsonNode payload = new com.fasterxml.jackson.databind.ObjectMapper().readTree(decoded);
-                    String studentCode = payload.hasNonNull("preferred_username") 
-                            ? payload.path("preferred_username").asText().toUpperCase() 
-                            : "";
-                    String name = payload.hasNonNull("name") 
-                            ? payload.path("name").asText() 
-                            : (payload.hasNonNull("given_name") ? payload.path("given_name").asText() : studentCode);
-                    String email = payload.hasNonNull("email") 
-                            ? payload.path("email").asText() 
-                            : (!studentCode.isBlank() ? studentCode.toLowerCase() + "@utp.edu.pe" : "");
-                    String userId = payload.hasNonNull("userId") 
-                            ? payload.path("userId").asText() 
-                            : (payload.hasNonNull("sub") ? payload.path("sub").asText() : (!studentCode.isBlank() ? "usr-" + studentCode.toLowerCase() : "usr-guest"));
+        SessionTokenInspector.SessionClaims claims = SessionTokenInspector.inspect(token);
+        String studentCode = claims.studentCode();
 
-                    String career = payload.hasNonNull("career") ? payload.path("career").asText() : (payload.hasNonNull("carrera") ? payload.path("carrera").asText() : "");
-                    String campus = payload.hasNonNull("campus") ? payload.path("campus").asText() : (payload.hasNonNull("campusDesc") ? payload.path("campusDesc").asText() : (payload.hasNonNull("sede") ? payload.path("sede").asText() : ""));
-                    int cycle = payload.hasNonNull("cycle") ? payload.path("cycle").asInt(1) : (payload.hasNonNull("ciclo") ? payload.path("ciclo").asInt(1) : 1);
+        StudentProfile profile = StudentProfile.builder()
+                .id(claims.userId())
+                .studentCode(studentCode)
+                .fullName(claims.fullName())
+                .email(claims.email())
+                .career(claims.career())
+                .campus(claims.campus())
+                .currentCycle(claims.cycle())
+                .token(SessionTokenInspector.normalizeToken(token))
+                .enrolledCourseCodes(List.of())
+                .build();
 
-                    StudentProfile profile = StudentProfile.builder()
-                            .id(userId)
-                            .studentCode(studentCode)
-                            .fullName(name)
-                            .email(email)
-                            .career(career)
-                            .campus(campus)
-                            .currentCycle(cycle)
-                            .token(token)
-                            .enrolledCourseCodes(List.of())
-                            .build();
-                    return studentRepositoryPort.findByStudentCode(studentCode)
-                            .map(existing -> {
-                                existing.setToken(token);
-                                return studentRepositoryPort.save(existing);
-                            })
-                            .orElseGet(() -> studentRepositoryPort.save(profile));
-                }
-            } catch (Exception e) {
-                // fall through
-            }
-        }
-        throw new IllegalArgumentException("Token de autenticación UTP inválido o expirado");
+        return studentRepositoryPort.findByStudentCode(studentCode)
+                .filter(existing -> existing.getId() != null && !existing.getId().isBlank())
+                .map(existing -> {
+                    existing.setToken(profile.getToken());
+                    return studentRepositoryPort.save(existing);
+                })
+                .orElseGet(() -> studentRepositoryPort.save(profile));
     }
 
     @Override
@@ -81,6 +67,6 @@ public class AuthenticateStudentUseCaseImpl implements AuthenticateStudentUseCas
     @Override
     public StudentProfile getProfile(String studentId) {
         return studentRepositoryPort.findById(studentId)
-                .orElseThrow(() -> new RuntimeException("Estudiante no encontrado: " + studentId));
+                .orElseThrow(() -> new ResourceNotFoundException("Estudiante no encontrado: " + studentId));
     }
 }

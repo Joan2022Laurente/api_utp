@@ -65,8 +65,39 @@ class SyllabusMarkdownExporterTest {
         assertTrue(md.contains("## 3. Sistema de Evaluación"));
         assertTrue(md.contains("`**(20%)APF1 + (20%)APF2 + (20%)APF3 + (40%)PROY`") || md.contains("`(20%)APF1 + (20%)APF2 + (20%)APF3 + (40%)PROY`"));
         assertTrue(md.contains("| APF1 | AVANCE DE PROYECTO 1 | 5 | 20% | Grupal | Endpoints y REST |"));
-        assertTrue(md.contains("## 4. Cronograma de Actividades Semanales (18 Semanas)"));
+        assertTrue(md.contains("## 4. Cronograma de Actividades Semanales (1 Semana)"),
+                "La duración del cronograma debe reflejar las semanas reales, no una constante de 18");
         assertTrue(md.contains("| 1 | Unidad 1 | Introducción a Spring Boot | Laboratorio 1 | - |"));
+    }
+
+    @Test
+    @DisplayName("El encabezado del cronograma refleja la duración real (ciclo de verano de 8 semanas)")
+    void testExportToMarkdownUsesRealDuration() {
+        java.util.List<SyllabusWeeklySession> summerSchedule = new java.util.ArrayList<>();
+        for (int w = 1; w <= 8; w++) {
+            summerSchedule.add(SyllabusWeeklySession.builder()
+                    .week(w)
+                    .session(1)
+                    .unit("Unidad " + ((w - 1) / 2 + 1))
+                    .topic("Tema de la semana " + w)
+                    .activities("Actividades")
+                    .build());
+        }
+
+        Syllabus syllabus = Syllabus.builder()
+                .courseCode("100000SI82")
+                .courseName("FORMACIÓN PARA LA INVESTIGACIÓN")
+                .formula("(25%)AP1 + (25%)AP2 + (50%)PTF")
+                .evaluations(List.of())
+                .weeklySchedule(summerSchedule)
+                .build();
+
+        String md = exporter.exportToMarkdown(syllabus);
+
+        assertTrue(md.contains("## 4. Cronograma de Actividades Semanales (8 Semanas)"),
+                "Un curso de verano de 8 semanas no debe anunciarse como 18 semanas");
+        assertFalse(md.contains("18 Semanas"),
+                "No debe aparecer una duración de 18 semanas en un sílabo de 8 semanas");
     }
 
     @Test

@@ -32,7 +32,24 @@ En caso de error (`4xx` o `5xx`):
 
 ### 1.2 Autenticación y Token Fallback
 - **Header:** `Authorization: Bearer <utp_access_token>`
-- **Token Fallback en Memoria:** Tras un `POST /auth/login` exitoso en una instancia activa, el gateway retiene el `lastActiveToken`. Las consultas posteriores (como `/syllabus/{courseCode}`) pueden omitir el header si se ejecutan en la misma sesión.
+- **Token Fallback en Memoria (aislado por estudiante):** Tras un `POST /auth/login` exitoso, el gateway retiene la sesión activa **indexada por el código de alumno del propio estudiante**. Las consultas posteriores (como `/syllabus/{courseCode}`) pueden omitir el header **siempre que la petición se atribuya a ese mismo estudiante**.
+- **Prohibición explícita de préstamo de tokens:** una petición **sin token propio nunca adopta el token de otro usuario**. El token no es un recurso global de la instancia: no existe un campo `lastActiveToken` compartido. Cuando la petición no incluye credenciales propias, la resolución contra el portal UTP+ Class se omite y el endpoint degrada de forma segura (caché de base de datos disponible o sílabo vacío).
+- **Vigencia del token:** los tokens expirados (`exp`), todavía no vigentes (`nbf`) o manipulados se rechazan con `401 Unauthorized`.
+
+### 1.3 Códigos de Estado y Códigos de Error
+Todo error se serializa en el mismo sobre `ApiResponse<T>` (nunca en la página HTML de error de Spring Boot):
+
+| Código | Significado | Casos |
+|---|---|---|
+| `200 OK` | Operación exitosa | — |
+| `400 Bad Request` | Validación de entrada | Payload inválido, parámetro obligatorio ausente, tipo de parámetro incorrecto, JSON malformado |
+| `401 Unauthorized` | Credenciales inválidas | Credenciales UTP rechazadas, token ausente/expirado/manipulado |
+| `403 Forbidden` | Acceso denegado con identidad válida | Consulta del perfil de otro estudiante |
+| `404 Not Found` | Recurso inexistente | Estudiante, curso o periodo no encontrado |
+| `405 Method Not Allowed` | Verbo HTTP no soportado | — |
+| `415 Unsupported Media Type` | Content-Type no soportado | — |
+| `502 Bad Gateway` | Dependencia externa no disponible | SSO Keycloak UTP, Portal GraphQL, PAO Calendar, AWS S3 |
+| `500 Internal Server Error` | Fallo imprevisto | Nunca se filtra la traza al cliente |
 
 ---
 
@@ -288,6 +305,13 @@ Calendario unificado de actividades del periodo con soporte de filtros:
   - `status` (`PENDING`, `DELIVERED`, `MISSING`, `PROGRAMMED`)
   - `onlyGraded` (`true` para filtrar únicamente actividades calificadas)
   - `type` (`HOMEWORK`, `FORUM`, `EVALUATION`)
+
+### 5.3 `GET /tasks/upcoming`
+Próximas evaluaciones ponderadas de todos los cursos, ordenadas cronológicamente y correlacionadas con el sílabo rector.
+- **Query Params:**
+  - `limit` *(integer, default: `5`)*: cantidad máxima de evaluaciones a retornar.
+- **Headers:** `Authorization: Bearer <token>`
+- **Respuesta:** `ApiResponse<List<AcademicActivity>>` con `syllabusCorrelation` (peso, semana y unidad rectoras) y estado de urgencia.
 
 ---
 

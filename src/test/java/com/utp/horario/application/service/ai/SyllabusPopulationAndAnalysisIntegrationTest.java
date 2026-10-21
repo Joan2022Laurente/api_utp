@@ -106,6 +106,12 @@ public class SyllabusPopulationAndAnalysisIntegrationTest {
     @Test
     @DisplayName("Poblar BD Dedicada con Sílabos Oficiales y Ejecutar Análisis Exhaustivo de Calidad")
     void populateAndAnalyzeDedicatedDatabase() throws Exception {
+        // Prueba de integración real: requiere Supabase (persistencia) y OpenRouter (extracción).
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                com.utp.horario.support.ExternalServices.isSupabaseReachable()
+                        && com.utp.horario.support.ExternalServices.isOpenRouterReachable(),
+                "Dependencias externas (Supabase/OpenRouter) no alcanzables: se omite la prueba de integración en red.");
+
         System.out.println("================================================================================");
         System.out.println("🚀 INICIANDO POBLAMIENTO Y ANÁLISIS DE SÍLABOS EN BD DEDICADA");
         System.out.println("   URL Supabase: " + supabaseProperties.getUrl());

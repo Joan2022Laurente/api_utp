@@ -72,7 +72,18 @@ public class SyllabusMarkdownExporter {
 
         // 5. Cronograma de Actividades Semanales
         if (syllabus.getWeeklySchedule() != null && !syllabus.getWeeklySchedule().isEmpty()) {
-            sb.append("## 4. Cronograma de Actividades Semanales (18 Semanas)\n\n");
+            // La duración es dinámica: 18 semanas en ciclo regular, 8-9 en verano, 4-8 en modulares.
+            // Se usa el número de semana real más alto y NUNCA una constante, para no inducir
+            // al LLM consumidor a asumir una duración inexistente.
+            int totalWeeks = syllabus.getWeeklySchedule().stream()
+                    .map(SyllabusWeeklySession::getWeek)
+                    .filter(java.util.Objects::nonNull)
+                    .max(Integer::compareTo)
+                    .orElse(syllabus.getWeeklySchedule().size());
+            sb.append("## 4. Cronograma de Actividades Semanales (")
+                    .append(totalWeeks)
+                    .append(totalWeeks == 1 ? " Semana)" : " Semanas)")
+                    .append("\n\n");
             sb.append("| Semana | Unidad | Temario y Contenidos | Actividades | Evaluación |\n");
             sb.append("| :---: | :--- | :--- | :--- | :---: |\n");
             for (SyllabusWeeklySession session : syllabus.getWeeklySchedule()) {

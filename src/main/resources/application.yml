@@ -39,7 +39,23 @@ ai:
       - google/gemma-4-26b-a4b-it:free
       - liquid/lfm-2.5-2.6b:free
 
+utp:
+  # Namespace UUID v5 de la plataforma UTP+Class, usado para derivar el 'paoUserId'
+  # de cada alumno (uuidv5(namespace, email_en_mayusculas)), igual que hace la SPA oficial.
+  # Sobrescribible si la plataforma cambia su namespace.
+  pao-uuid-namespace: ${UTP_PAO_UUID_NAMESPACE:6ba7b810-9dad-11d1-80b4-00c04fd430c8}
+  # Correspondencia PAO (userId) por codigo de alumno: "<codigoAlumno>=<paoUserId>,<otro>=<otroPaoUserId>".
+  # IMPRESCINDIBLE: el portal UTP+ Class (PAO) exige la cabecera 'user-id' con el paoUserId,
+  # que NO viaja en el JWT de Keycloak (solo el 'sub' de la cuenta SSO). Sin esta correspondencia
+  # los endpoints PAO de silabo y calendario responden 403 y el alumno no recibe datos.
+  # NOTA: en operacion normal NO es necesaria: el paoUserId se deriva de forma determinista
+  # del correo institucional. Se mantiene como respaldo/excepcion.
+  # Fallback: variable de entorno UTP_PAO_USER_MAP.
+  pao-user-map: ${UTP_PAO_USER_MAP:}
+
 app:
   jwt:
-    secret: 404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970
+    # Secreto de firma JWT. NUNCA debe versionarse con un valor literal:
+    # se inyecta desde el entorno / secret manager del despliegue.
+    secret: ${JWT_SECRET:}
     expiration-ms: 86400000 # 24 horas

@@ -33,12 +33,68 @@ public class SupabaseSyllabusClient {
     private final SupabaseProperties properties;
     private final ObjectMapper objectMapper;
 
+    /**
+     * Backoff tras fallos consecutivos de conectividad con Supabase.
+     *
+     * <p>Si el proyecto Supabase es inalcanzable (red, DNS, firewall), cada cache-miss
+     * repetiría el mismo fallo y saturaría los logs con cientos de ERROR por minuto.
+     * Tras {@link #MAX_CONSECUTIVE_FAILURES} fallos consecutivos se aplica una pausa
+     * breve antes de reintentar, sin perder la capacidad de recuperación automática.</p>
+     */
+    private static final int MAX_CONSECUTIVE_FAILURES = 3;
+    private static final long BACKOFF_MILLIS = 30_000L;
+
+    private final java.util.concurrent.atomic.AtomicInteger consecutiveFailures =
+            new java.util.concurrent.atomic.AtomicInteger(0);
+    private volatile long backoffUntil = 0L;
+
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10))
             .build();
 
+    /**
+     * Indica si el cliente tiene credenciales utilizables.
+     *
+     * <p>Sin {@code service-role-key} toda llamada a Supabase sería rechazada con HTTP 401
+     * tras agotar el tiempo de espera de red. Se omite la llamada para no penalizar la
+     * latencia de los endpoints de sílabo en despliegues sin Supabase configurado.</p>
+     */
+    private boolean isConfigured() {
+        if (!properties.isEnabled()) {
+            return false;
+        }
+        String url = properties.getUrl();
+        String key = properties.getServiceRoleKey();
+        return url != null && !url.isBlank() && key != null && !key.isBlank();
+    }
+
+    /**
+     * Determina si el cliente está en ventana de backoff (host inalcanzable).
+     */
+    private boolean isBackedOff() {
+        return System.currentTimeMillis() < backoffUntil;
+    }
+
+    private void recordSuccess() {
+        if (consecutiveFailures.getAndSet(0) > 0) {
+            log.info("[Supabase] Conectividad restaurada con Supabase DB");
+        }
+    }
+
+    private void recordFailure(String operation, String detail) {
+        int failures = consecutiveFailures.incrementAndGet();
+        if (failures >= MAX_CONSECUTIVE_FAILURES) {
+            backoffUntil = System.currentTimeMillis() + BACKOFF_MILLIS;
+            log.warn("[Supabase] {} fallo(s) consecutivo(s) en '{}'. Se pausa {} s antes de reintentar. {}",
+                    failures, operation, BACKOFF_MILLIS / 1000, detail);
+            consecutiveFailures.set(0);
+        } else {
+            log.error("[Supabase] Error en '{}': {}", operation, detail);
+        }
+    }
+
     public Optional<Syllabus> findByCourseCode(String courseCode) {
-        if (!properties.isEnabled() || courseCode == null || courseCode.isBlank()) {
+        if (!isConfigured() || courseCode == null || courseCode.isBlank() || isBackedOff()) {
             return Optional.empty();
         }
 
@@ -64,13 +120,15 @@ public class SupabaseSyllabusClient {
                     JsonNode row = root.get(0);
                     Syllabus syllabus = mapRowToSyllabus(row);
                     log.info("[Supabase] 🎯 Sílabo encontrado en Supabase DB para curso: {} ({})", syllabus.getCourseName(), syllabus.getCourseCode());
+                    recordSuccess();
                     return Optional.of(syllabus);
                 }
+                recordSuccess();
             } else {
                 log.warn("[Supabase] Error consultando curso {}: HTTP {}", clean, response.statusCode());
             }
         } catch (Exception e) {
-            log.error("[Supabase] Excepción al consultar sílabo en Supabase para {}: {}", courseCode, e.getMessage());
+            recordFailure("findByCourseCode(" + courseCode + ")", String.valueOf(e.getMessage()));
         }
 
         return Optional.empty();
@@ -78,7 +136,7 @@ public class SupabaseSyllabusClient {
 
     public List<Syllabus> findAll() {
         List<Syllabus> list = new ArrayList<>();
-        if (!properties.isEnabled()) {
+        if (!isConfigured() || isBackedOff()) {
             return list;
         }
 
@@ -101,16 +159,17 @@ public class SupabaseSyllabusClient {
                         list.add(mapRowToSyllabus(row));
                     }
                 }
+                recordSuccess();
             }
         } catch (Exception e) {
-            log.error("[Supabase] Error listando sílabos desde Supabase: {}", e.getMessage());
+            recordFailure("findAll", String.valueOf(e.getMessage()));
         }
 
         return list;
     }
 
     public Syllabus upsert(Syllabus syllabus) {
-        if (!properties.isEnabled() || syllabus == null) {
+        if (!isConfigured() || syllabus == null || isBackedOff()) {
             return syllabus;
         }
 
@@ -149,14 +208,15 @@ public class SupabaseSyllabusClient {
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
             if (response.statusCode() == 200 || response.statusCode() == 201) {
-                log.info("[Supabase] 💾 Sílabo persistido exitosamente en Supabase DB para: {} ({})", 
+                recordSuccess();
+                log.info("[Supabase] 💾 Sílabo persistido exitosamente en Supabase DB para: {} ({})",
                         syllabus.getCourseName(), syllabus.getCourseCode());
             } else {
-                log.warn("[Supabase] Respuesta no esperada al persistir {}: HTTP {} -> {}", 
+                log.warn("[Supabase] Respuesta no esperada al persistir {}: HTTP {} -> {}",
                         courseId, response.statusCode(), response.body());
             }
         } catch (Exception e) {
-            log.error("[Supabase] Error persistiendo sílabo en Supabase para {}: {}", syllabus.getCourseCode(), e.getMessage());
+            recordFailure("upsert(" + syllabus.getCourseCode() + ")", String.valueOf(e.getMessage()));
         }
 
         return syllabus;

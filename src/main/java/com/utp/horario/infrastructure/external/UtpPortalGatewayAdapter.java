@@ -2,6 +2,7 @@ package com.utp.horario.infrastructure.external;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.utp.horario.domain.exception.AuthenticationException;import com.utp.horario.domain.exception.UpstreamServiceException;
 import com.utp.horario.domain.model.AcademicActivity;
 import com.utp.horario.domain.model.ClassSession;
 import com.utp.horario.domain.model.Course;
@@ -12,7 +13,10 @@ import com.utp.horario.domain.model.ScheduleInterval;
 import com.utp.horario.domain.model.StudentProfile;
 import com.utp.horario.domain.model.TaskSpecification;
 import com.utp.horario.domain.port.out.UtpPortalGatewayPort;
+import jakarta.annotation.PostConstruct;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.net.URI;
@@ -42,8 +46,33 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
     private final Map<String, String> buildingCache = new ConcurrentHashMap<>();
+
+    /**
+     * Mapa de correspondencia PAO (userId) por código de alumno.
+     *
+     * <p>Se puebla únicamente desde configuración externa (variables de entorno / properties).
+     * Nunca se versiona información personal de estudiantes dentro del código fuente.</p>
+     */
     private final Map<String, String> studentPaoUserMap = new ConcurrentHashMap<>();
-    private volatile String lastActiveToken = "";
+
+    /**
+     * Marca temporal del ultimo intento de auto-descubrimiento por alumno.
+     * Evita repetir sondas HTTP contra PAO dentro de la ventana de TTL.
+     */
+    private final Map<String, Long> paoDiscoveryAttempts = new ConcurrentHashMap<>();
+
+    private static final long PAO_DISCOVERY_TTL_MILLIS = 30 * 60 * 1000L;
+
+    /**
+     * Sesiones activas indexadas <b>por código de alumno</b>.
+     *
+     * <p>Reemplaza al antiguo campo global {@code lastActiveToken}, que provocaba una fuga
+     * de identidad: cualquier petición sin token tomaba prestado el token del último
+     * estudiante que se autenticó en la instancia. Con este registro, el token de un
+     * estudiante solo es resoluble por su propio código y nunca por el de otro.</p>
+     */
+    private final Map<String, String> studentSessionRegistry = new ConcurrentHashMap<>();
+
     private static final Pattern EVAL_PATTERN = Pattern.compile("(?i)(PC\\d*|AP\\d*|EC\\d*|TI\\d*|EP|EF|EXFN|EXPA|PROY|AVANCE|PORTAFOLIO|PARTICIPACI[OÓ]N|EXAMEN)");
 
     public UtpPortalGatewayAdapter() {
@@ -52,7 +81,324 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
         this.objectMapper = new ObjectMapper();
-        this.studentPaoUserMap.put("u23307609", "4e535263-79a0-5890-ae33-72a7aa0629ab");
+    }
+
+    /**
+     * Correspondencia PAO inyectada por Spring ({@code utp.pao-user-map}).
+     * Fallback por variable de entorno: {@code UTP_PAO_USER_MAP}.
+     */
+    @Value("${utp.pao-user-map:}")
+    private String paoUserMapProperty;
+
+    /**
+     * Namespace UUID v5 de la plataforma UTP+Class, usado para derivar el {@code paoUserId}.
+     */
+    @Value("${utp.pao-uuid-namespace:}")
+    private String paoUuidNamespace;
+
+    /**
+     * Carga el mapeo userId(PAO) por código de alumno desde la propiedad
+     * {@code utp.pao-user-map} o la variable de entorno {@code UTP_PAO_USER_MAP},
+     * con formato {@code <codigoAlumno>=<paoUserId>,<otroCodigo>=<otroPaoUserId>}.
+     *
+     * <p><b>Imprescindible:</b> el portal UTP+ Class (PAO) exige la cabecera
+     * {@code user-id} con el identificador PAO del alumno, que <b>no viaja en el JWT</b>
+     * de Keycloak (solo el {@code sub} de la cuenta SSO). Sin esta correspondencia, los
+     * endpoints PAO de sílabo y calendario responden HTTP 403 y el alumno recibe un
+     * sílabo vacío / cero actividades.</p>
+     *
+     * <p>Motivo de externalizarlo: no versionar información personal de estudiantes
+     * dentro del código fuente, sin perder funcionalidad.</p>
+     */
+    @PostConstruct
+    public void loadPaoUserOverrides() {
+        // El namespace de derivacion puede venir de la configuracion de Spring.
+        String envNamespace = System.getenv("UTP_PAO_UUID_NAMESPACE");
+        if ((envNamespace == null || envNamespace.isBlank())
+                && paoUuidNamespace != null && !paoUuidNamespace.isBlank()) {
+            System.setProperty("utp.pao-uuid-namespace", paoUuidNamespace.trim());
+        }
+
+        String raw = (paoUserMapProperty != null && !paoUserMapProperty.isBlank())
+                ? paoUserMapProperty
+                : System.getenv("UTP_PAO_USER_MAP");
+
+        if (raw == null || raw.isBlank()) {
+            log.warn("[UtpPortalGatewayAdapter] Sin correspondencia PAO configurada "
+                    + "(utp.pao-user-map / UTP_PAO_USER_MAP). Se intentara el auto-descubrimiento "
+                    + "del paoUserId por alumno; si no es derivable, los endpoints PAO de silabo y "
+                    + "calendario responderan 403 y el alumno recibira una degradacion elegante.");
+            loadPaoUserCacheFromDisk();
+            return;
+        }
+
+        for (String entry : raw.split(",")) {
+            String[] kv = entry.split("=", 2);
+            if (kv.length != 2) {
+                continue;
+            }
+            String code = kv[0].trim().toLowerCase();
+            String userId = kv[1].trim();
+            if (!code.isBlank() && !userId.isBlank()) {
+                studentPaoUserMap.put(code, userId);
+            }
+        }
+        loadPaoUserCacheFromDisk();
+        log.info("[UtpPortalGatewayAdapter] Correspondencias PAO cargadas desde configuracion externa: {}",
+                studentPaoUserMap.size());
+        // Se persisten en la cache local para que la resolucion sobreviva a reinicios
+        // y no haya que reconfigurar el mapeo en cada despliegue.
+        persistPaoUserCacheToDisk();
+    }
+
+    // ==================================================================
+    // RESOLUCION DINAMICA DEL paoUserId (aislada por codigo de alumno)
+    // ==================================================================
+
+    /**
+     * Candidatos a {@code paoUserId} presentes en las claims del token de sesion.
+     *
+     * <p>Si la plataforma UTP expone el identificador interno de PAO en el token
+     * (claim {@code paoUserId} / {@code userId} / {@code classUserId}), se resuelve
+     * <b>automaticamente</b> sin intervencion manual.</p>
+     */
+    private List<String> extractPaoUserIdCandidatesFromToken(String token) {
+        List<String> candidates = new ArrayList<>();
+        if (token == null || !token.contains(".")) {
+            return candidates;
+        }
+        try {
+            String[] parts = token.split("\\.");
+            if (parts.length < 2) {
+                return candidates;
+            }
+            byte[] decoded = Base64.getUrlDecoder().decode(parts[1]);
+            JsonNode payload = objectMapper.readTree(decoded);
+            for (String claim : new String[]{"paoUserId", "pao_user_id", "classUserId", "class_id", "userId", "user_id"}) {
+                if (payload.hasNonNull(claim)) {
+                    String value = payload.path(claim).asText();
+                    if (value != null && !value.isBlank() && !candidates.contains(value.trim())) {
+                        candidates.add(value.trim());
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+            // Token no decodificable: se continuara con el resto de vias.
+        }
+        return candidates;
+    }
+
+    /**
+     * Candidatos institucionales expuestos por el GraphQL del Portal UTP para el alumno
+     * autenticado ({@code student.profile.peopleCode} y {@code student.profile.studentCode}).
+     *
+     * <p>Se consultan con el token del propio alumno, por lo que no requieren ningun
+     * secreto adicional ni mapeo previo.</p>
+     */
+    private List<String> fetchPortalCandidateIds(String token) {
+        List<String> candidates = new ArrayList<>();
+        if (token == null || token.isBlank()) {
+            return candidates;
+        }
+        String studentCode = extractStudentCodeFromToken(token);
+        if (studentCode.isBlank()) {
+            return candidates;
+        }
+        try {
+            String query = "{\"query\":\"{ student { profile { peopleCode studentCode } } }\"}";
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create("https://api-portal.utpxpedition.com/graphql"))
+                    .timeout(Duration.ofSeconds(8))
+                    .header("accept", "application/json")
+                    .header("applicationid", "APP00002")
+                    .header("authorization", "Bearer " + token)
+                    .header("content-type", "application/json")
+                    .header("isreservation", "false")
+                    .header("user-id", studentCode)
+                    .header("user-role", "student")
+                    .POST(HttpRequest.BodyPublishers.ofString(query))
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() == 200) {
+                JsonNode profile = objectMapper.readTree(response.body())
+                        .path("data").path("student").path("profile");
+                for (String field : new String[]{"peopleCode", "studentCode"}) {
+                    if (profile.hasNonNull(field)) {
+                        String value = profile.path(field).asText();
+                        if (value != null && !value.isBlank() && !candidates.contains(value.trim())) {
+                            candidates.add(value.trim());
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.debug("[UtpPortalGatewayAdapter] No se pudieron obtener identificadores institucionales del Portal: {}", e.getMessage());
+        }
+        return candidates;
+    }
+
+    /**
+     * Comprueba si un identificador es un {@code paoUserId} valido para PAO.
+     *
+     * <p>Realiza una sonda HTTP minima y barata contra un endpoint PAO autenticado.
+     * Solo un {@code HTTP 200} acredita que la identidad corresponde al alumno.</p>
+     */
+    private boolean probePaoUserId(String candidate, String token) {
+        if (candidate == null || candidate.isBlank() || token == null || token.isBlank()) {
+            return false;
+        }
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create("https://api-pao.utpxpedition.com/communication/student/ad/banners"))
+                    .timeout(Duration.ofSeconds(8))
+                    .header("accept", "application/json")
+                    .header("authorization", "Bearer " + token)
+                    .header("user-id", candidate)
+                    .header("user-role", "STUDENT")
+                    .header("x-tenant-id", extractTenantIdFromToken(token))
+                    .GET()
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            return response.statusCode() == 200;
+        } catch (Exception e) {
+            log.debug("[UtpPortalGatewayAdapter] Sonda PAO fallida para candidato: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Auto-descubre el {@code paoUserId} de un alumno probando candidatos y validandolos
+     * contra el propio PAO.
+     *
+     * <p>El resultado válido se registra en el mapa aislado por codigo de alumno, de modo
+     * que el descubrimiento ocurre <b>una sola vez</b> por alumno y queda cacheado.</p>
+     *
+     * @return el {@code paoUserId} resuelto, o cadena vacia si no es derivable.
+     */
+    private String discoverPaoUserId(String studentCode, String token) {
+        if (studentCode == null || studentCode.isBlank()) {
+            return "";
+        }
+        String key = studentCode.toLowerCase();
+
+        // Evita repetir el descubrimiento (y sus sondas HTTP) dentro de la ventana de TTL.
+        Long lastAttempt = paoDiscoveryAttempts.get(key);
+        if (lastAttempt != null && (System.currentTimeMillis() - lastAttempt) < PAO_DISCOVERY_TTL_MILLIS) {
+            return "";
+        }
+        paoDiscoveryAttempts.put(key, System.currentTimeMillis());
+
+        List<String> candidates = new ArrayList<>();
+        candidates.addAll(extractPaoUserIdCandidatesFromToken(token));
+        candidates.addAll(fetchPortalCandidateIds(token));
+
+        for (String candidate : candidates) {
+            if (probePaoUserId(candidate, token)) {
+                registerPaoUserId(key, candidate);
+                log.info("[UtpPortalGatewayAdapter] paoUserId auto-descubierto para el alumno {} (candidato '{}' validado contra PAO)",
+                        key, candidate);
+                return candidate;
+            }
+            log.debug("[UtpPortalGatewayAdapter] Candidato '{}' no validado como paoUserId para {}", candidate, key);
+        }
+
+        log.debug("[UtpPortalGatewayAdapter] No fue posible auto-descubrir el paoUserId del alumno {} "
+                + "(candidatos evaluados: {})", key, candidates.size());
+        return "";
+    }
+
+    /**
+     * Registra el {@code paoUserId} de un alumno en el mapa aislado y lo persiste
+     * en la cache local (best effort).
+     */
+    private void registerPaoUserId(String studentCode, String paoUserId) {
+        if (studentCode == null || studentCode.isBlank() || paoUserId == null || paoUserId.isBlank()) {
+            return;
+        }
+        String key = studentCode.toLowerCase();
+        if (paoUserId.equals(studentPaoUserMap.get(key))) {
+            return; // ya conocido: no se reescribe la cache local en cada peticion
+        }
+        studentPaoUserMap.put(key, paoUserId);
+        persistPaoUserCacheToDisk();
+    }
+
+    /**
+     * Auto-registro por observacion: si una llamada a PAO resulto exitosa con un
+     * {@code user-id} concreto, ese identificador es el {@code paoUserId} real del alumno
+     * y queda cacheado para el. Cierra el ciclo y hace que la resolucion sea
+     * autosuficiente a partir de la primera interaccion válida.
+     */
+    private void rememberResolvedPaoUserId(String token, String usedUserId) {
+        if (token == null || token.isBlank() || usedUserId == null || usedUserId.isBlank()) {
+            return;
+        }
+        String studentCode = extractStudentCodeFromToken(token);
+        if (studentCode.isBlank()) {
+            return;
+        }
+        String key = studentCode.toLowerCase();
+        String known = studentPaoUserMap.get(key);
+        if (!usedUserId.equals(known)) {
+            registerPaoUserId(key, usedUserId);
+            log.info("[UtpPortalGatewayAdapter] paoUserId registrado automaticamente para el alumno {} "
+                    + "tras una llamada PAO exitosa", key);
+        }
+    }
+
+    // ==================================================================
+    // Cache local persistente del mapeo studentCode -> paoUserId
+    // ==================================================================
+
+    /**
+     * Ruta del fichero de cache. Se prioriza la variable de entorno para poder
+     * apuntar a un volumen persistente en PaaS.
+     */
+    private String paoUserCachePath() {
+        String configured = System.getenv("UTP_PAO_USER_CACHE_FILE");
+        if (configured != null && !configured.isBlank()) {
+            return configured;
+        }
+        return java.nio.file.Paths.get(System.getProperty("user.dir", "."), ".pao-user-map.cache.json").toString();
+    }
+
+    @SuppressWarnings("unchecked")
+    private void loadPaoUserCacheFromDisk() {
+        try {
+            java.nio.file.Path path = java.nio.file.Paths.get(paoUserCachePath());
+            if (!java.nio.file.Files.exists(path)) {
+                return;
+            }
+            Map<String, String> cached = objectMapper.readValue(java.nio.file.Files.readString(path), Map.class);
+            int loaded = 0;
+            for (Map.Entry<String, String> entry : cached.entrySet()) {
+                if (entry.getKey() != null && entry.getValue() != null
+                        && !entry.getKey().isBlank() && !entry.getValue().isBlank()) {
+                    studentPaoUserMap.putIfAbsent(entry.getKey().toLowerCase(), entry.getValue());
+                    loaded++;
+                }
+            }
+            if (loaded > 0) {
+                log.info("[UtpPortalGatewayAdapter] {} correspondencias PAO restauradas desde la cache local", loaded);
+            }
+        } catch (Exception e) {
+            log.debug("[UtpPortalGatewayAdapter] No se pudo leer la cache local de paoUserId: {}", e.getMessage());
+        }
+    }
+
+    private synchronized void persistPaoUserCacheToDisk() {
+        if (studentPaoUserMap.isEmpty()) {
+            return;
+        }
+        try {
+            java.nio.file.Path path = java.nio.file.Paths.get(paoUserCachePath());
+            objectMapper.writerWithDefaultPrettyPrinter().writeValue(path.toFile(), studentPaoUserMap);
+            log.debug("[UtpPortalGatewayAdapter] Cache local de paoUserId actualizada ({} entradas)", studentPaoUserMap.size());
+        } catch (Exception e) {
+            log.debug("[UtpPortalGatewayAdapter] No se pudo persistir la cache local de paoUserId: {}", e.getMessage());
+        }
     }
 
     public static class ClassroomLocation {
@@ -76,6 +422,23 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         return new ClassroomLocation(isLab ? "Laboratorio" : "Aula", "", "");
     }
 
+    /**
+     * Resuelve el {@code paoUserId} (identidad interna de PAO) del alumno, en cascada:
+     *
+     * <ol>
+     *   <li><b>Claim del token</b> ({@code paoUserId}/{@code userId}/{@code classUserId}): si la
+     *       plataforma lo expone, se resuelve sin ninguna intervencion manual.</li>
+     *   <li><b>Registro en cache</b> del alumno (auto-descubrimiento previo o correspondencia
+     *       externa): indexado por codigo de alumno, nunca compartido.</li>
+     *   <li><b>Auto-descubrimiento validado</b>: se extraen los identificadores institucionales
+     *       del Portal UTP (peopleCode/studentCode) y se validan contra PAO; el que responde
+     *       HTTP 200 es el {@code paoUserId} real y queda cacheado para el alumno.</li>
+     *   <li><b>Fallback</b> al claim {@code sub} de Keycloak.</li>
+     * </ol>
+     *
+     * <p>El aislamiento es estricto: cada alumno resuelve y cachea su propia identidad y
+     * jamás se presta la de otro.</p>
+     */
     private String extractUserIdFromToken(String token) {
         if (token == null || !token.contains(".")) return "";
         try {
@@ -83,16 +446,46 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
             if (parts.length >= 2) {
                 byte[] decoded = Base64.getUrlDecoder().decode(parts[1]);
                 JsonNode payload = objectMapper.readTree(decoded);
-                if (payload.hasNonNull("paoUserId")) return payload.path("paoUserId").asText();
-                if (payload.hasNonNull("userId")) return payload.path("userId").asText();
-                if (payload.hasNonNull("user_id")) return payload.path("user_id").asText();
 
-                String studentCode = payload.hasNonNull("preferred_username") 
-                        ? payload.path("preferred_username").asText().toLowerCase() 
+                String studentCode = payload.hasNonNull("preferred_username")
+                        ? payload.path("preferred_username").asText().toLowerCase()
                         : (payload.hasNonNull("username") ? payload.path("username").asText().toLowerCase() : "");
-                if (!studentCode.isBlank() && studentPaoUserMap.containsKey(studentCode)) {
-                    return studentPaoUserMap.get(studentCode);
+
+                // 1) Derivacion determinista (uuidv5 sobre el correo institucional).
+                //    Es la misma regla que aplica el portal oficial UTP+Class: no requiere
+                //    configuracion, no hace llamadas de red y funciona para cualquier alumno.
+                String derived = PaoUserIdDeriver.derive(
+                        payload.hasNonNull("email") ? payload.path("email").asText() : null);
+                if (!derived.isBlank()) {
+                    registerPaoUserId(studentCode, derived);
+                    return derived;
                 }
+
+                // 2) Claim directo: resolucion totalmente automatica si UTP lo expone.
+                List<String> claimCandidates = extractPaoUserIdCandidatesFromToken(token);
+                if (!claimCandidates.isEmpty()) {
+                    String studentCodeForClaim = extractStudentCodeFromToken(token);
+                    registerPaoUserId(studentCodeForClaim, claimCandidates.get(0));
+                    return claimCandidates.get(0);
+                }
+
+                // 3) Correspondencia ya conocida (configuracion externa o auto-descubrimiento previo).
+                if (!studentCode.isBlank()) {
+                    String cached = studentPaoUserMap.get(studentCode);
+                    if (cached != null && !cached.isBlank()) {
+                        return cached;
+                    }
+                }
+
+                // 4) Auto-descubrimiento validado contra PAO.
+                if (!studentCode.isBlank()) {
+                    String discovered = discoverPaoUserId(studentCode, token);
+                    if (!discovered.isBlank()) {
+                        return discovered;
+                    }
+                }
+
+                // 5) Fallback al 'sub' de Keycloak (puede ser rechazado por PAO con 403).
                 if (payload.hasNonNull("sub")) return payload.path("sub").asText();
             }
         } catch (Exception ignored) {}
@@ -163,26 +556,83 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 int expiresIn = root.hasNonNull("expires_in") ? root.path("expires_in").asInt(1800) : 1800;
 
                 StudentProfile base = parseProfileFromTokens(accessToken, refreshToken, expiresIn, cleanUsername);
-                this.lastActiveToken = accessToken;
+                // Sesión indexada por código de alumno (aislamiento estricto por estudiante).
+                registerStudentSession(base.getStudentCode(), accessToken);
                 // El JWT pao-web NO incluye career/campus/cycle — enriquecer desde Portal GraphQL
                 StudentProfile profile = enrichProfileFromPortal(base, accessToken);
                 log.info("[UTP SSO Auth] Autenticación exitosa: {} | campus='{}' | carrera='{}' | ciclo={}",
                         profile.getStudentCode(), profile.getCampus(), profile.getCareer(), profile.getCurrentCycle());
                 return profile;
+            } else if (response.statusCode() == 400 || response.statusCode() == 401 || response.statusCode() == 403) {
+                log.warn("[UTP SSO Auth] Credenciales rechazadas por sso.utp.edu.pe, status: {}", response.statusCode());
+                throw new AuthenticationException("Credenciales UTP inválidas.");
             } else {
-                log.warn("[UTP SSO Auth] Falló autenticación en sso.utp.edu.pe, status: {}, body: {}", response.statusCode(), response.body());
-                throw new RuntimeException("Credenciales UTP inválidas o servicio temporalmente no disponible.");
+                log.warn("[UTP SSO Auth] Falló autenticación en sso.utp.edu.pe, status: {}", response.statusCode());
+                throw new UpstreamServiceException("El servicio de autenticación UTP no está disponible temporalmente.");
             }
+        } catch (AuthenticationException | UpstreamServiceException e) {
+            throw e;
         } catch (Exception e) {
             log.error("[UTP SSO Auth] Error conectando con servidor SSO UTP: {}", e.getMessage());
-            throw new RuntimeException("Error en autenticación UTP: " + e.getMessage());
+            throw new UpstreamServiceException("Error en autenticación UTP: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Registra la sesión activa del estudiante en el registro aislado por código de alumno.
+     */
+    private void registerStudentSession(String studentCode, String accessToken) {
+        if (studentCode == null || studentCode.isBlank() || accessToken == null || accessToken.isBlank()) {
+            return;
+        }
+        studentSessionRegistry.put(studentCode.toUpperCase(), accessToken);
+    }
+
+    /**
+     * Resuelve el token efectivo de una petición.
+     *
+     * <p><b>Regla de aislamiento de identidad:</b> si la petición no trae token propio,
+     * NO se presta el token de ningún otro estudiante. Anteriormente se recurría a un
+     * campo global {@code lastActiveToken} que contenía el token del último usuario
+     * autenticado en la instancia, provocando fugas cruzadas de identidad.</p>
+     *
+     * @return el token propio normalizado, o cadena vacía si la petición es anónima.
+     */
+    private String resolveEffectiveToken(String token) {
+        if (token == null || token.isBlank()) {
+            return "";
+        }
+        String raw = token.trim();
+        if (raw.regionMatches(true, 0, "Bearer ", 0, 7)) {
+            raw = raw.substring(7).trim();
+        }
+        // Si el propio estudiante tiene una sesión renovada registrada, se usa SU token.
+        // La búsqueda está indexada por su propio código: jamás devuelve el de otro.
+        String studentCode = extractStudentCodeFromToken(raw);
+        if (!studentCode.isBlank()) {
+            String ownSessionToken = resolveTokenForStudent(studentCode);
+            if (!ownSessionToken.isBlank()) {
+                return ownSessionToken;
+            }
+        }
+        return raw;
+    }
+
+    /**
+     * Resuelve el token de un estudiante <b>concreto</b> a partir del registro de sesiones.
+     * Nunca devuelve el token de un estudiante distinto al solicitado.
+     */
+    private String resolveTokenForStudent(String studentCode) {
+        if (studentCode == null || studentCode.isBlank()) {
+            return "";
+        }
+        return studentSessionRegistry.getOrDefault(studentCode.toUpperCase(), "");
     }
 
     @Override
     public StudentProfile refreshToken(String refreshToken) {
         if (refreshToken == null || refreshToken.isBlank()) {
-            throw new IllegalArgumentException("Refresh token inválido o vacío");
+            throw new AuthenticationException("Refresh token inválido o vacío");
         }
 
         try {
@@ -208,15 +658,21 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 int expiresIn = root.hasNonNull("expires_in") ? root.path("expires_in").asInt(1800) : 1800;
 
                 StudentProfile profile = parseProfileFromTokens(accessToken, newRefreshToken, expiresIn, "");
+                registerStudentSession(profile.getStudentCode(), accessToken);
                 log.info("[UTP SSO Refresh] Token renovado exitosamente para alumno: {}", profile.getStudentCode());
                 return profile;
+            } else if (response.statusCode() == 400 || response.statusCode() == 401 || response.statusCode() == 403) {
+                log.warn("[UTP SSO Refresh] Refresh token rechazado por sso.utp.edu.pe, status: {}", response.statusCode());
+                throw new AuthenticationException("Refresh token expirado o inválido en Keycloak UTP.");
             } else {
-                log.warn("[UTP SSO Refresh] Falló renovación en sso.utp.edu.pe, status: {}, body: {}", response.statusCode(), response.body());
-                throw new RuntimeException("Refresh token expirado o inválido en Keycloak UTP.");
+                log.warn("[UTP SSO Refresh] Falló renovación en sso.utp.edu.pe, status: {}", response.statusCode());
+                throw new UpstreamServiceException("El servicio de renovación de sesión UTP no está disponible temporalmente.");
             }
+        } catch (AuthenticationException | UpstreamServiceException e) {
+            throw e;
         } catch (Exception e) {
             log.error("[UTP SSO Refresh] Error conectando con servidor SSO UTP: {}", e.getMessage());
-            throw new RuntimeException("Error renovando sesión UTP: " + e.getMessage());
+            throw new UpstreamServiceException("Error renovando sesión UTP: " + e.getMessage(), e);
         }
     }
 
@@ -420,7 +876,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                         JsonNode root = objectMapper.readTree(response.body());
                         JsonNode intervalNode = root.path("data").path("current_interval");
                         if (intervalNode != null && intervalNode.hasNonNull("events")) {
-                            return parsePaoCalendarResponse(intervalNode);
+                            return parsePaoCalendarResponse(intervalNode, extractStudentCodeFromToken(token));
                         }
                     } else {
                         log.warn("[UTP PAO Calendar] Status no exitoso ({}) desde api-pao.utpxpedition.com", response.statusCode());
@@ -730,7 +1186,13 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
 
     private void registerCourseRef(String studentCode, String name, String numericSection, String courseUuid, String sectionUuid, String syllabusUrl) {
         if (name == null || name.isBlank()) return;
-        String userKey = (studentCode != null && !studentCode.isBlank()) ? studentCode.toLowerCase() : "shared";
+        // Sin identidad de estudiante no se registra el mapeo: evita un bucket "compartido"
+        // que podría devolver secciones de otro alumno.
+        if (studentCode == null || studentCode.isBlank()) {
+            log.debug("[UtpPortalGatewayAdapter] Mapeo de curso descartado por ausencia de identidad del estudiante");
+            return;
+        }
+        String userKey = studentCode.toLowerCase();
         Map<String, CourseRef> courseRefMap = userCourseRefMap.computeIfAbsent(userKey, k -> new ConcurrentHashMap<>());
 
         CourseRef ref = new CourseRef(name, numericSection, courseUuid, sectionUuid, syllabusUrl);
@@ -751,7 +1213,9 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
 
     private CourseRef findCourseRef(String studentCode, String courseCodeOrName) {
         if (courseCodeOrName == null || courseCodeOrName.isBlank()) return null;
-        String userKey = (studentCode != null && !studentCode.isBlank()) ? studentCode.toLowerCase() : "shared";
+        // Sin identidad de estudiante no se resuelve ningún mapeo (evita cruces de identidad).
+        if (studentCode == null || studentCode.isBlank()) return null;
+        String userKey = studentCode.toLowerCase();
         Map<String, CourseRef> courseRefMap = userCourseRefMap.get(userKey);
         if (courseRefMap == null || courseRefMap.isEmpty()) return null;
 
@@ -807,6 +1271,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
 
             HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
             if (resp.statusCode() == 200) {
+                rememberResolvedPaoUserId(token, userId);
                 JsonNode root = objectMapper.readTree(resp.body());
                 JsonNode events = root.path("data").path("current_interval").path("events");
                 if (events.isArray()) {
@@ -846,7 +1311,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 .toUpperCase();
     }
 
-    private ScheduleInterval parsePaoCalendarResponse(JsonNode intervalNode) {
+    private ScheduleInterval parsePaoCalendarResponse(JsonNode intervalNode, String studentCode) {
         String periodName = intervalNode.path("period_name").asText("2026 - Ciclo 2 Agosto");
         int weekNumber = intervalNode.path("week_number").asInt(1);
         int totalWeeks = intervalNode.path("total_weeks").asInt(18);
@@ -880,12 +1345,14 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 String sectionUuid = sectionId.matches("^[0-9a-fA-F-]{36}$") ? sectionId : "";
                 String finalSection = !parsed.sectionCode.isBlank() ? parsed.sectionCode : (sectionId.matches("^\\d+$") ? sectionId : "");
 
-                registerCourseRef(null, parsed.cleanTitle, finalSection, courseUuid, sectionUuid, syllabusUrl);
-                registerCourseRef(null, rawTitle, finalSection, courseUuid, sectionUuid, syllabusUrl);
-                if (!courseId.isBlank()) registerCourseRef(null, courseId, finalSection, courseUuid, sectionUuid, syllabusUrl);
+                registerCourseRef(studentCode, parsed.cleanTitle, finalSection, courseUuid, sectionUuid, syllabusUrl);
+                registerCourseRef(studentCode, rawTitle, finalSection, courseUuid, sectionUuid, syllabusUrl);
+                if (!courseId.isBlank()) registerCourseRef(studentCode, courseId, finalSection, courseUuid, sectionUuid, syllabusUrl);
 
-                LocalDateTime startAt = LocalDateTime.parse(startAtStr.replace(" ", "T"));
-                LocalDateTime finishAt = LocalDateTime.parse(finishAtStr.replace(" ", "T"));
+                // Parsing defensivo de marcas de tiempo: un formato inesperado del proveedor
+                // no debe abortar la sincronización completa del horario.
+                LocalDateTime startAt = parseLocalDateTimeSafe(startAtStr);
+                LocalDateTime finishAt = parseLocalDateTimeSafe(finishAtStr);
 
                 classes.add(ClassSession.builder()
                         .id(id)
@@ -928,6 +1395,35 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 .courses(courses)
                 .classes(classes)
                 .build();
+    }
+
+    /**
+     * Parseo defensivo de {@link LocalDateTime} tolerante a los formatos Emitidos por el
+     * calendario PAO ({@code yyyy-MM-dd HH:mm:ss}, ISO-8601, con o sin milisegundos).
+     *
+     * @return el instante parseado o {@code null} si el valor es nulo o tiene un formato no reconocido.
+     */
+    private LocalDateTime parseLocalDateTimeSafe(String rawValue) {
+        if (rawValue == null || rawValue.isBlank()) {
+            return null;
+        }
+        String normalized = rawValue.trim().replace(" ", "T");
+        try {
+            return LocalDateTime.parse(normalized);
+        } catch (Exception ignored) {
+            // Continúa con los formatos alternativos
+        }
+        try {
+            return LocalDateTime.parse(normalized, java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS"));
+        } catch (Exception ignored) {
+            // Continúa con el último intento
+        }
+        try {
+            return LocalDateTime.parse(normalized, java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"));
+        } catch (Exception ignored) {
+            log.warn("[UtpPortalGatewayAdapter] Marca de tiempo con formato no reconocido: '{}'", rawValue);
+            return null;
+        }
     }
 
     private static class ParsedTitle {
@@ -994,22 +1490,29 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
             return "";
         }
 
-        String effectiveToken = (token != null && !token.isBlank()) ? token : this.lastActiveToken;
+        // Token efectivo: SOLO el propio de la petición. Nunca se presta el de otro estudiante.
+        String effectiveToken = resolveEffectiveToken(token);
 
         try {
             String pdfUrl = courseCodeOrUrl.trim();
 
             if (!pdfUrl.startsWith("http://") && !pdfUrl.startsWith("https://")) {
+                // La resolución contra el portal PAO exige credenciales propias.
+                // Sin token del solicitante no se invoca a un endpoint autenticado
+                // (y jamás con el token de otro estudiante).
+                if (effectiveToken.isBlank()) {
+                    log.warn("[UtpPortalGatewayAdapter] Sílabo '{}' no resoluble: la petición no incluye credenciales propias", courseCodeOrUrl);
+                    return "";
+                }
+
                 String userId = extractUserIdFromToken(effectiveToken);
                 String tenantId = extractTenantIdFromToken(effectiveToken);
 
                 String studentCode = extractStudentCodeFromToken(effectiveToken);
                 CourseRef ref = findCourseRef(studentCode, pdfUrl);
                 if (ref == null || (ref.syllabusUrl.isBlank() && ref.numericSection.isBlank() && ref.courseUuid.isBlank())) {
-                    if (effectiveToken != null && !effectiveToken.isBlank()) {
-                        populateCourseSectionsFromPao(effectiveToken);
-                        ref = findCourseRef(studentCode, pdfUrl);
-                    }
+                    populateCourseSectionsFromPao(effectiveToken);
+                    ref = findCourseRef(studentCode, pdfUrl);
                 }
 
                 if (ref != null && !ref.syllabusUrl.isBlank()) {
@@ -1049,13 +1552,17 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
 
                         HttpResponse<String> res = httpClient.send(reqBuilder.GET().build(), HttpResponse.BodyHandlers.ofString());
                         if (res.statusCode() == 200) {
+                            rememberResolvedPaoUserId(effectiveToken, userId);
                             JsonNode node = objectMapper.readTree(res.body());
                             if (node.has("data") && node.path("data").hasNonNull("syllabusUrl")) {
                                 pdfUrl = node.path("data").path("syllabusUrl").asText();
                                 log.info("[UtpPortalGatewayAdapter] URL de sílabo obtenida desde PAO API: {}", pdfUrl);
                             }
                         } else {
-                            log.warn("[UtpPortalGatewayAdapter] Respuesta no exitosa ({}) de PAO syllabus para {}: {}", res.statusCode(), syllabusApiUrl, res.body());
+                            log.warn("[UtpPortalGatewayAdapter] Respuesta no exitosa ({}) de PAO syllabus para {}: {}. "
+                                            + "Si el codigo es 403, configure la correspondencia PAO del alumno en 'utp.pao-user-map' "
+                                            + "(o UTP_PAO_USER_MAP): el 'user-id' debe ser el paoUserId, no el 'sub' del JWT SSO.",
+                                    res.statusCode(), syllabusApiUrl, res.body());
                         }
                     }
                 }
@@ -1362,6 +1869,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
 
             HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
             if (resp.statusCode() == 200) {
+                rememberResolvedPaoUserId(effectiveToken, userId);
                 JsonNode root = objectMapper.readTree(resp.body());
                 JsonNode eventsNode = root.path("data").path("current_interval").path("events");
                 if (eventsNode.isArray()) {
@@ -1403,7 +1911,10 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                     }
                 }
             } else {
-                log.warn("[UtpPortalGatewayAdapter] Error {} consultando calendar activities: {}", resp.statusCode(), resp.body());
+                log.warn("[UtpPortalGatewayAdapter] Error {} consultando calendar activities: {}. "
+                                + "Si el codigo es 403, configure la correspondencia PAO del alumno en 'utp.pao-user-map' "
+                                + "(o UTP_PAO_USER_MAP): el 'user-id' debe ser el paoUserId, no el 'sub' del JWT SSO.",
+                        resp.statusCode(), resp.body());
             }
         } catch (Exception e) {
             log.error("[UtpPortalGatewayAdapter] Excepción en fetchCalendarActivities: {}", e.getMessage());
@@ -1455,7 +1966,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         String effectiveToken = (token != null && token.startsWith("Bearer ")) ? token.substring(7).trim() : token;
         String studentCode = extractStudentCodeFromToken(effectiveToken);
         if (studentCode == null || studentCode.isBlank()) {
-            throw new IllegalArgumentException("Token de autenticación no contiene código de estudiante válido");
+            throw new AuthenticationException("Token de autenticación no contiene código de estudiante válido");
         }
         String effectivePeriod = (periodId != null && !periodId.isBlank()) ? periodId : "2263";
 

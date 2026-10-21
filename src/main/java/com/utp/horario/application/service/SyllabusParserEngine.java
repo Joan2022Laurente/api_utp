@@ -94,7 +94,7 @@ public class SyllabusParserEngine {
         Pattern creditsPattern = Pattern.compile("Créditos:\\s*(\\d+)", Pattern.CASE_INSENSITIVE);
         Matcher creditsMatcher = creditsPattern.matcher(cleanText);
         if (creditsMatcher.find()) {
-            credits = Integer.parseInt(creditsMatcher.group(1));
+            credits = parseIntSafe(creditsMatcher.group(1), 3);
         }
 
         String modality = "Presencial";
@@ -108,7 +108,7 @@ public class SyllabusParserEngine {
         Pattern hoursPattern = Pattern.compile("Horas semanales:\\s*(\\d+)", Pattern.CASE_INSENSITIVE);
         Matcher hoursMatcher = hoursPattern.matcher(cleanText);
         if (hoursMatcher.find()) {
-            weeklyHours = Integer.parseInt(hoursMatcher.group(1));
+            weeklyHours = parseIntSafe(hoursMatcher.group(1), 4);
         }
 
         List<String> careers = new ArrayList<>();
@@ -176,6 +176,20 @@ public class SyllabusParserEngine {
                 .aiPolicy("Prohibido el uso de IA generativa para redacción o copia no documentada.")
                 .weeklySchedule(weeklySchedule)
                 .build();
+    }
+
+    /**
+     * Conversión defensiva a entero: un valor numérico fuera del rango de {@code int}
+     * (por ejemplo un número de créditos malformado en el PDF) no debe abortar el parseo
+     * completo del sílabo con una {@link NumberFormatException}.
+     */
+    private int parseIntSafe(String rawValue, int fallback) {
+        try {
+            return Integer.parseInt(rawValue.trim());
+        } catch (Exception e) {
+            log.warn("[SyllabusParserEngine] Valor numérico no interpretable ('{}'), se usa el valor por defecto {}", rawValue, fallback);
+            return fallback;
+        }
     }
 
     private Syllabus buildEmptySyllabus(String courseCode) {

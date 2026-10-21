@@ -110,12 +110,18 @@ public class OpenRouterFleetService {
             String apiKey = properties.getKeys().get(keyIdx);
             String maskedKey = apiKey.length() > 14 ? apiKey.substring(0, 14) + "..." : "key-" + keyIdx;
 
+            // Rotacion de MODELO ademas de rotacion de clave: si el modelo primario esta saturado
+            // (TimeoutException / 429) cambiar de clave no ayuda, hay que cambiar de modelo.
+            String effectiveModel = dynamicModels.isEmpty()
+                    ? primaryModel
+                    : dynamicModels.get((attempts - 1) % dynamicModels.size());
+
             try {
-                log.info("[OpenRouterFleet] 🤖 Solicitando extracción IA: Modelo Primario='{}' (Fallbacks: {}) usando Clave #{}/{} ({})", 
-                        primaryModel, dynamicModels, (keyIdx + 1), totalKeys, maskedKey);
+                log.info("[OpenRouterFleet] 🤖 Solicitando extracción IA: Modelo='{}' (Fallbacks: {}) usando Clave #{}/{} ({})",
+                        effectiveModel, dynamicModels, (keyIdx + 1), totalKeys, maskedKey);
 
                 Map<String, Object> payload = new LinkedHashMap<>();
-                payload.put("model", primaryModel);
+                payload.put("model", effectiveModel);
                 payload.put("models", dynamicModels.subList(0, Math.min(3, dynamicModels.size())));
                 payload.put("provider", Map.of("allow_fallbacks", true));
                 payload.put("messages", List.of(
@@ -147,7 +153,7 @@ public class OpenRouterFleetService {
                         String content = choices.get(0).path("message").path("content").asText("");
                         Optional<Syllabus> parsed = parseAiResponseToDomain(content, courseCode);
                         if (parsed.isPresent()) {
-                            String usedModel = resJson.path("model").asText(primaryModel);
+                            String usedModel = resJson.path("model").asText(effectiveModel);
                             log.info("[OpenRouterFleet] ✨ Sílabo exitosamente extraído con IA (Modelo activo: {}, Clave #{}) para curso: {}", 
                                     usedModel, (keyIdx + 1), courseCode);
                             return parsed;

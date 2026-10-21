@@ -30,6 +30,11 @@ class SupabaseSyllabusClientTest {
     @Test
     @DisplayName("Debe persistir y recuperar correctamente un sílabo en Supabase PostgreSQL")
     void shouldPersistAndRetrieveSyllabusInSupabase() {
+        // Prueba de integración real: requiere conectividad y credenciales de Supabase.
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                com.utp.horario.support.ExternalServices.isSupabaseReachable(),
+                "Supabase no es alcanzable desde este entorno: se omite la prueba de integración en red.");
+
         String testCode = "100000TEST_UNIT";
         Syllabus sample = Syllabus.builder()
                 .id(testCode)

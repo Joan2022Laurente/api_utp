@@ -80,6 +80,11 @@ class SyllabusAiAndPersistenceEndToEndTest {
     @Test
     @DisplayName("Cache Hit: Curso existente en Supabase DB se retorna inmediatamente de la base de datos")
     void testCacheHitFromSupabase() {
+        // Prueba de integración real: requiere conectividad y credenciales de Supabase.
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                com.utp.horario.support.ExternalServices.isSupabaseReachable(),
+                "Supabase no es alcanzable desde este entorno: se omite la prueba de integración en red.");
+
         String code = "100000TEST_CACHE";
         supabaseClient.upsert(Syllabus.builder()
                 .id(code)
@@ -122,6 +127,11 @@ class SyllabusAiAndPersistenceEndToEndTest {
     @Test
     @DisplayName("Flota OpenRouter: 12 claves activas cargadas y disponibles para rotación")
     void testOpenRouterFleetLoaded() {
+        // La flota de claves proviene de OPENROUTER_KEYS o del fichero local no versionado.
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                openRouterProperties.getKeys() != null && !openRouterProperties.getKeys().isEmpty(),
+                "No hay claves de OpenRouter configuradas en este entorno: se omite la prueba de la flota.");
+
         assertNotNull(openRouterProperties.getKeys());
         assertEquals(12, openRouterProperties.getKeys().size(), "Deben haber 12 cuentas en la flota");
         assertTrue(openRouterProperties.isEnabled());
@@ -132,6 +142,12 @@ class SyllabusAiAndPersistenceEndToEndTest {
     @Test
     @DisplayName("Extracción con IA + Persistencia en Supabase: Flujo completo Cache-Aside")
     void testAiParsingAndPersistenceFlow() {
+        // Prueba de integración real: requiere Supabase (persistencia) y OpenRouter (extracción).
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                com.utp.horario.support.ExternalServices.isSupabaseReachable()
+                        && com.utp.horario.support.ExternalServices.isOpenRouterReachable(),
+                "Dependencias externas (Supabase/OpenRouter) no alcanzables: se omite la prueba de integración en red.");
+
         String testCourseCode = "100000TEST_ROBOTICS";
         String samplePdfText = """
                 1. INFORMACIÓN GENERAL

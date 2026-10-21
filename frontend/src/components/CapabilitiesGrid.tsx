@@ -40,15 +40,15 @@ const capabilities: Capability[] = [
     title: "Simulador de Promedios Ponderados",
     desc: "Interpreta automáticamente la fórmula matemática de evaluación de cada curso (ej. PC1*0.20 + EXFN*0.40) y calcula la nota requerida para aprobar.",
     pills: ["Formula Parser", "What-If Analysis", "Evaluaciones"],
-    endpoint: "/api/v1/grades/simulate",
-    method: "POST",
+    endpoint: "/api/v1/courses/{courseCode}/simulator",
+    method: "GET",
   },
   {
     num: "05 // CANVAS LMS SYNC",
     title: "Tareas & Rúbricas Detalladas",
     desc: "Extrae entregas pendientes de Canvas junto con sus matrices de rúbrica (criterios de calificación, puntajes máximos y descripciones de logro).",
     pills: ["Canvas LMS", "Rubric Matrices", "Deadlines"],
-    endpoint: "/api/v1/tasks/rubrics",
+    endpoint: "/api/v1/tasks/{sectionId}/{activityId}",
     method: "GET",
   },
   {
