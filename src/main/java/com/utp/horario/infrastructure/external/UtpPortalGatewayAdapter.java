@@ -245,8 +245,18 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
      * Solo un {@code HTTP 200} acredita que la identidad corresponde al alumno.</p>
      */
     private boolean probePaoUserId(String candidate, String token) {
+        return probePaoUserIdStatus(candidate, token) == 200;
+    }
+
+    /**
+     * Sonda PAO que distingue entre "identidad rechazada" (403/401: el id es incorrecto)
+     * y "no concluyente" (error de red: no se puede decidir).
+     *
+     * @return codigo HTTP de la respuesta, o -1 si no hubo respuesta concluyente.
+     */
+    private int probePaoUserIdStatus(String candidate, String token) {
         if (candidate == null || candidate.isBlank() || token == null || token.isBlank()) {
-            return false;
+            return -1;
         }
         try {
             HttpRequest request = HttpRequest.newBuilder()
@@ -261,10 +271,10 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                     .build();
 
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            return response.statusCode() == 200;
+            return response.statusCode();
         } catch (Exception e) {
-            log.debug("[UtpPortalGatewayAdapter] Sonda PAO fallida para candidato: {}", e.getMessage());
-            return false;
+            log.debug("[UtpPortalGatewayAdapter] Sonda PAO no concluyente para candidato: {}", e.getMessage());
+            return -1;
         }
     }
 
@@ -454,11 +464,32 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 // 1) Derivacion determinista (uuidv5 sobre el correo institucional).
                 //    Es la misma regla que aplica el portal oficial UTP+Class: no requiere
                 //    configuracion, no hace llamadas de red y funciona para cualquier alumno.
-                String derived = PaoUserIdDeriver.derive(
-                        payload.hasNonNull("email") ? payload.path("email").asText() : null);
-                if (!derived.isBlank()) {
-                    registerPaoUserId(studentCode, derived);
-                    return derived;
+                //    Se valida una sola vez contra PAO por alumno para no confiar a ciegas:
+                //    si la plataforma cambiara el namespace, se cae a la cascada en vez de 403.
+                if (!studentCode.isBlank() && studentPaoUserMap.containsKey(studentCode)) {
+                    String known = studentPaoUserMap.get(studentCode);
+                    if (known != null && !known.isBlank()) {
+                        return known;
+                    }
+                }
+                String email = payload.hasNonNull("email") ? payload.path("email").asText() : null;
+                for (String derived : PaoUserIdDeriver.deriveCandidates(email)) {
+                    int status = probePaoUserIdStatus(derived, token);
+                    if (status == 200) {
+                        registerPaoUserId(studentCode, derived);
+                        log.info("[UtpPortalGatewayAdapter] paoUserId derivado y validado contra PAO para el alumno {}",
+                                studentCode);
+                        return derived;
+                    }
+                    if (status == 403 || status == 401) {
+                        // Identidad rechazada: la derivacion no aplica para este alumno.
+                        log.warn("[UtpPortalGatewayAdapter] El paoUserId derivado no es aceptado por PAO para {} "
+                                + "(HTTP {}). Se continua con las vias alternativas de resolucion.", studentCode, status);
+                    } else {
+                        // Sonda no concluyente (red): se asume la derivacion, que es la mejor hipotesis.
+                        registerPaoUserId(studentCode, derived);
+                        return derived;
+                    }
                 }
 
                 // 2) Claim directo: resolucion totalmente automatica si UTP lo expone.

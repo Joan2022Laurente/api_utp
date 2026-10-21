@@ -36,6 +36,13 @@ final class PaoUserIdDeriver {
      */
     static final String DEFAULT_NAMESPACE = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
 
+    /**
+     * Namespace alternativo canonico de la misma libreria {@code uuid} de npm
+     * ({@code uuid.URL}). Se usa como candidato de respaldo si la plataforma
+     * cambiase del namespace DNS al URL: ambos estan publicados en el bundle.
+     */
+    static final String ALTERNATE_NAMESPACE = "6ba7b811-9dad-11d1-80b4-00c04fd430c8";
+
     private static final char[] HEX = "0123456789abcdef".toCharArray();
 
     private PaoUserIdDeriver() {
@@ -57,17 +64,36 @@ final class PaoUserIdDeriver {
     }
 
     /**
-     * Deriva el {@code paoUserId} a partir del correo institucional del alumno.
+     * Deriva el {@code paoUserId} con un namespace concreto.
+     *
+     * @param email      correo del alumno (se normaliza a mayusculas, igual que la SPA oficial)
+     * @param namespace  namespace UUID v5 a utilizar
+     * @return el UUID v5 resultante, o cadena vacia si no es derivable.
+     */
+    /**
+     * Deriva el {@code paoUserId} a partir del correo institucional del alumno,
+     * usando el namespace efectivo configurado.
      *
      * @param email correo del alumno (se normaliza a mayusculas, igual que la SPA oficial)
      * @return el UUID v5 resultante, o cadena vacia si el correo no es utilizable.
      */
     static String derive(String email) {
-        if (email == null || email.isBlank()) {
+        return derive(email, namespace());
+    }
+
+    /**
+     * Deriva el {@code paoUserId} a partir del correo institucional del alumno.
+     *
+     * @param email      correo del alumno (se normaliza a mayusculas, igual que la SPA oficial)
+     * @param namespace  namespace UUID v5 a utilizar
+     * @return el UUID v5 resultante, o cadena vacia si no es derivable.
+     */
+    static String derive(String email, String namespace) {
+        if (email == null || email.isBlank() || namespace == null || namespace.isBlank()) {
             return "";
         }
         try {
-            byte[] namespaceBytes = uuidToBytes(namespace());
+            byte[] namespaceBytes = uuidToBytes(namespace);
             byte[] nameBytes = email.trim().toUpperCase(java.util.Locale.ROOT).getBytes(StandardCharsets.UTF_8);
 
             MessageDigest sha1 = MessageDigest.getInstance("SHA-1");
@@ -83,6 +109,23 @@ final class PaoUserIdDeriver {
         } catch (NoSuchAlgorithmException | IllegalArgumentException e) {
             return "";
         }
+    }
+
+    /**
+     * Candidatos de derivacion para un alumno: el namespace configurado y, como respaldo,
+     * el namespace alternativo canonico de la misma libreria.
+     */
+    static java.util.List<String> deriveCandidates(String email) {
+        java.util.List<String> candidates = new java.util.ArrayList<>(2);
+        String primary = derive(email, namespace());
+        if (!primary.isBlank()) {
+            candidates.add(primary);
+        }
+        String alternate = derive(email, ALTERNATE_NAMESPACE);
+        if (!alternate.isBlank() && !candidates.contains(alternate)) {
+            candidates.add(alternate);
+        }
+        return candidates;
     }
 
     private static byte[] uuidToBytes(String uuid) {
