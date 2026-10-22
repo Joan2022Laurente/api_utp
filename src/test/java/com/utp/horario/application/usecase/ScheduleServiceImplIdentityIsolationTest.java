@@ -49,12 +49,12 @@ class ScheduleServiceImplIdentityIsolationTest {
     @Test
     @DisplayName("El horario sincronizado por un alumno no se sirve a una petición anónima")
     void anonymousRequestDoesNotReceiveAnotherStudentsSchedule() {
-        String tokenAlumnoA = TestTokens.validFor("U23307609");
+        String tokenAlumnoA = TestTokens.validFor("U99999999");
 
         service.syncScheduleFromUtp(tokenAlumnoA, PERIOD);
 
         // El caché quedó indexado bajo el código del alumno A, no bajo una clave compartida.
-        assertTrue(repository.findByStudentIdAndPeriod("U23307609", PERIOD).isPresent(),
+        assertTrue(repository.findByStudentIdAndPeriod("U99999999", PERIOD).isPresent(),
                 "El horario debe cachearse bajo el código del propio alumno");
         assertTrue(repository.findByStudentIdAndPeriod("current-student", PERIOD).isEmpty(),
                 "No debe existir una entrada compartida 'current-student'");
@@ -69,13 +69,13 @@ class ScheduleServiceImplIdentityIsolationTest {
     @Test
     @DisplayName("Dos alumnos distintos no comparten el horario cacheado")
     void twoStudentsDoNotShareCachedSchedule() {
-        String tokenA = TestTokens.validFor("U23307609");
+        String tokenA = TestTokens.validFor("U99999999");
         String tokenB = TestTokens.validFor("U21200000");
 
         service.syncScheduleFromUtp(tokenA, PERIOD);
         service.syncScheduleFromUtp(tokenB, PERIOD);
 
-        assertTrue(repository.findByStudentIdAndPeriod("U23307609", PERIOD).isPresent());
+        assertTrue(repository.findByStudentIdAndPeriod("U99999999", PERIOD).isPresent());
         assertTrue(repository.findByStudentIdAndPeriod("U21200000", PERIOD).isPresent());
         assertTrue(repository.findByStudentIdAndPeriod("current-student", PERIOD).isEmpty(),
                 "No debe existir una entrada compartida entre estudiantes");
@@ -84,11 +84,11 @@ class ScheduleServiceImplIdentityIsolationTest {
     @Test
     @DisplayName("La lectura con token propio se persiste bajo la identidad del solicitante")
     void readWithOwnTokenIsPersistedUnderOwnIdentity() {
-        String token = TestTokens.validFor("U23307609");
+        String token = TestTokens.validFor("U99999999");
 
         service.getStudentSchedule("current-student", PERIOD, token);
 
-        assertTrue(repository.findByStudentIdAndPeriod("U23307609", PERIOD).isPresent(),
+        assertTrue(repository.findByStudentIdAndPeriod("U99999999", PERIOD).isPresent(),
                 "El horario debe indexarse por el código del alumno autenticado");
         assertTrue(repository.findByStudentIdAndPeriod("current-student", PERIOD).isEmpty());
     }

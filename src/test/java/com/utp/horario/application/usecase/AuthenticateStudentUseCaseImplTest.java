@@ -56,7 +56,7 @@ class AuthenticateStudentUseCaseImplTest {
     @Test
     @DisplayName("Un token expirado se rechaza con AuthenticationException (HTTP 401)")
     void expiredTokenIsRejected() {
-        String expired = TestTokens.expiredFor("U23307609");
+        String expired = TestTokens.expiredFor("U99999999");
 
         AuthenticationException ex = assertThrows(AuthenticationException.class,
                 () -> useCase.authenticateWithToken(expired));
@@ -67,10 +67,10 @@ class AuthenticateStudentUseCaseImplTest {
     @Test
     @DisplayName("Un token vigente resuelve el perfil del alumno correspondiente")
     void validTokenResolvesProfile() {
-        StudentProfile profile = useCase.authenticateWithToken(TestTokens.validFor("U23307609"));
+        StudentProfile profile = useCase.authenticateWithToken(TestTokens.validFor("U99999999"));
 
-        assertEquals("U23307609", profile.getStudentCode());
-        assertEquals("sub-u23307609", profile.getId());
+        assertEquals("U99999999", profile.getStudentCode());
+        assertEquals("sub-u99999999", profile.getId());
     }
 
     @Test
@@ -91,10 +91,10 @@ class AuthenticateStudentUseCaseImplTest {
     @Test
     @DisplayName("Las credenciales inválidas del portal se propagan sin envolverse")
     void upstreamAuthenticationFailurePropagates() {
-        when(gateway.login("u23307609", "mala")).thenThrow(new AuthenticationException("Credenciales UTP inválidas."));
+        when(gateway.login("U99999999", "mala")).thenThrow(new AuthenticationException("Credenciales UTP inválidas."));
 
         AuthenticationException ex = assertThrows(AuthenticationException.class,
-                () -> useCase.authenticateWithCredentials("u23307609", "mala"));
+                () -> useCase.authenticateWithCredentials("U99999999", "mala"));
 
         assertEquals("Credenciales UTP inválidas.", ex.getMessage());
     }

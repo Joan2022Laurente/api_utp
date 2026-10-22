@@ -49,11 +49,11 @@ class UtpPortalGatewayAdapterTokenIsolationTest {
     @Test
     @DisplayName("Una petición sin token NO toma prestado el token de otro estudiante")
     void anonymousRequestNeverBorrowsAnotherStudentToken() throws Exception {
-        // Se simula que el alumno U23307609 tiene una sesión activa registrada.
+        // Se simula que el alumno U99999999 tiene una sesión activa registrada.
         Method register = UtpPortalGatewayAdapter.class.getDeclaredMethod(
                 "registerStudentSession", String.class, String.class);
         register.setAccessible(true);
-        register.invoke(adapter, "U23307609", TestTokens.validFor("U23307609"));
+        register.invoke(adapter, "U99999999", TestTokens.validFor("U99999999"));
 
         Field field = UtpPortalGatewayAdapter.class.getDeclaredField("studentSessionRegistry");
         field.setAccessible(true);

@@ -23,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
  */
 class PaoUserIdLiveResolutionTest {
 
-    private static final String USERNAME = "u23307609";
+    private static final String USERNAME = "U99999999";
     private static final String PASSWORD = System.getenv().getOrDefault("UTP_TEST_PASSWORD", "");
     private static final String PAO_SECTION_UUID = "2421dd0b-b5ee-5193-8190-902ec8403745";
     private static final String EXPECTED_CATALOG_CODE = "100000SI82";

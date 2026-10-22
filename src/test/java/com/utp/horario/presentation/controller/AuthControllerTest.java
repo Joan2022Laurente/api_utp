@@ -42,9 +42,9 @@ class AuthControllerTest {
     void login_withValidCredentials_returnsProfileAndSessionTokens() throws Exception {
         StudentProfile mockProfile = StudentProfile.builder()
                 .id("usr-123")
-                .studentCode("U23307609")
+                .studentCode("U99999999")
                 .fullName("JUAN PEREZ")
-                .email("u23307609@utp.edu.pe")
+                .email("U99999999@utp.edu.pe")
                 .career("INGENIERIA DE SISTEMAS")
                 .campus("LIMA CENTRO")
                 .currentCycle(5)
@@ -54,11 +54,11 @@ class AuthControllerTest {
                 .enrolledCourseCodes(List.of())
                 .build();
 
-        when(authenticateStudentUseCase.authenticateWithCredentials("u23307609", "secretPass"))
+        when(authenticateStudentUseCase.authenticateWithCredentials("U99999999", "secretPass"))
                 .thenReturn(mockProfile);
 
         LoginRequest request = LoginRequest.builder()
-                .username("u23307609")
+                .username("U99999999")
                 .password("secretPass")
                 .build();
 
@@ -67,7 +67,7 @@ class AuthControllerTest {
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.studentCode").value("U23307609"))
+                .andExpect(jsonPath("$.data.studentCode").value("U99999999"))
                 .andExpect(jsonPath("$.data.token").value("jwt.access.token"))
                 .andExpect(jsonPath("$.data.refreshToken").value("jwt.refresh.token"))
                 .andExpect(jsonPath("$.data.expiresIn").value(1800));
@@ -91,7 +91,7 @@ class AuthControllerTest {
     void me_withValidBearerHeader_returnsStudentProfile() throws Exception {
         StudentProfile mockProfile = StudentProfile.builder()
                 .id("usr-123")
-                .studentCode("U23307609")
+                .studentCode("U99999999")
                 .fullName("JUAN PEREZ")
                 .token("mocked.jwt.token")
                 .build();
@@ -103,7 +103,7 @@ class AuthControllerTest {
                         .header("Authorization", "Bearer mocked.jwt.token"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.studentCode").value("U23307609"));
+                .andExpect(jsonPath("$.data.studentCode").value("U99999999"));
     }
 
     @Test
@@ -118,7 +118,7 @@ class AuthControllerTest {
     void refresh_withValidRefreshToken_returnsUpdatedProfile() throws Exception {
         StudentProfile mockProfile = StudentProfile.builder()
                 .id("usr-123")
-                .studentCode("U23307609")
+                .studentCode("U99999999")
                 .token("new.jwt.token")
                 .refreshToken("new.refresh.token")
                 .expiresIn(1800)
@@ -144,7 +144,7 @@ class AuthControllerTest {
     void getProfileById_whenSameUser_returns200Ok() throws Exception {
         StudentProfile mockProfile = StudentProfile.builder()
                 .id("usr-123")
-                .studentCode("U23307609")
+                .studentCode("U99999999")
                 .fullName("JUAN PEREZ")
                 .token("mocked.jwt.token")
                 .build();
@@ -158,14 +158,14 @@ class AuthControllerTest {
                         .header("Authorization", "Bearer mocked.jwt.token"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.studentCode").value("U23307609"));
+                .andExpect(jsonPath("$.data.studentCode").value("U99999999"));
     }
 
     @Test
     void getProfileById_whenDifferentUser_returns403Forbidden() throws Exception {
         StudentProfile mockCaller = StudentProfile.builder()
                 .id("usr-caller-123")
-                .studentCode("U23307609")
+                .studentCode("U99999999")
                 .fullName("ALUMNO ATACANTE")
                 .token("mocked.jwt.token")
                 .build();
