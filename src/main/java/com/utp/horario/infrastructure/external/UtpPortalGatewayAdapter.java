@@ -35,6 +35,7 @@ import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -54,6 +55,22 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
      * Nunca se versiona información personal de estudiantes dentro del código fuente.</p>
      */
     private final Map<String, String> studentPaoUserMap = new ConcurrentHashMap<>();
+
+    /**
+     * Identificadores PAO derivados de forma determinista (uuidv5 sobre el correo).
+     *
+     * <p>Se mantienen SEPARADOS de la configuracion explicita: un valor derivado jamas debe
+     * prevalecer sobre una configuracion del operador, pero tampoco al reves (un valor
+     * obsoleto en cache no puede invalidar una derivacion valida).</p>
+     */
+    private final Map<String, String> derivedPaoUserMap = new ConcurrentHashMap<>();
+
+    /**
+     * Identificadores derivados que PAO ha rechazado, por alumno.
+     * Permite pasar automaticamente a la siguiente variante si la plataforma cambiase
+     * su namespace de generacion.
+     */
+    private final Map<String, Set<String>> invalidatedPaoIds = new ConcurrentHashMap<>();
 
     /**
      * Marca temporal del ultimo intento de auto-descubrimiento por alumno.
@@ -323,16 +340,51 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
      * Registra el {@code paoUserId} de un alumno en el mapa aislado y lo persiste
      * en la cache local (best effort).
      */
+    /**
+     * Selecciona la derivacion valida para el alumno, saltando los identificadores que PAO
+     * ha rechazado previamente (auto-recuperacion ante un cambio de namespace en la plataforma).
+     */
+    private String selectValidDerivedId(String studentCode, String email) {
+        Set<String> invalidated = invalidatedPaoIds.get(studentCode == null ? "" : studentCode.toLowerCase());
+        for (String candidate : PaoUserIdDeriver.deriveCandidates(email)) {
+            if (invalidated == null || !invalidated.contains(candidate)) {
+                return candidate;
+            }
+        }
+        return "";
+    }
+
+    /**
+     * Marca como invalido un {@code paoUserId} que PAO ha rechazado, de modo que la
+     * siguiente peticion del alumno pruebe la siguiente variante derivada.
+     */
+    private void invalidatePaoUserId(String studentCode, String usedUserId) {
+        if (studentCode == null || studentCode.isBlank() || usedUserId == null || usedUserId.isBlank()) {
+            return;
+        }
+        String key = studentCode.toLowerCase();
+        invalidatedPaoIds.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet()).add(usedUserId);
+        studentPaoUserMap.remove(key);
+        log.warn("[UtpPortalGatewayAdapter] PAO rechazó el identificador {} del alumno {}. "
+                + "Se probará la siguiente variante derivada.", usedUserId, key);
+    }
+
+    /**
+     * Registra un {@code paoUserId} derivado en el mapa de valores derivados (solo memoria).
+     *
+     * <p>Los valores derivados <b>no se persisten</b>: son deterministas y se recalculan
+     * en cada arranque, de modo que nunca pueden quedar obsoletos ni contaminar la cache
+     * persistente con valores de prueba.</p>
+     */
     private void registerPaoUserId(String studentCode, String paoUserId) {
         if (studentCode == null || studentCode.isBlank() || paoUserId == null || paoUserId.isBlank()) {
             return;
         }
         String key = studentCode.toLowerCase();
-        if (paoUserId.equals(studentPaoUserMap.get(key))) {
-            return; // ya conocido: no se reescribe la cache local en cada peticion
+        if (paoUserId.equals(derivedPaoUserMap.get(key))) {
+            return;
         }
-        studentPaoUserMap.put(key, paoUserId);
-        persistPaoUserCacheToDisk();
+        derivedPaoUserMap.put(key, paoUserId);
     }
 
     /**
@@ -386,6 +438,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
             for (Map.Entry<String, String> entry : cached.entrySet()) {
                 if (entry.getKey() != null && entry.getValue() != null
                         && !entry.getKey().isBlank() && !entry.getValue().isBlank()) {
+                    // Solo se restaura la configuracion explicita del operador.
                     studentPaoUserMap.putIfAbsent(entry.getKey().toLowerCase(), entry.getValue());
                     loaded++;
                 }
@@ -399,6 +452,8 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
     }
 
     private synchronized void persistPaoUserCacheToDisk() {
+        // Solo se persiste la configuracion EXPLICITA del operador: los valores derivados
+        // son deterministas y no deben sobrevivar a un reinicio (ni contaminar la cache).
         if (studentPaoUserMap.isEmpty()) {
             return;
         }
@@ -461,51 +516,44 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                         ? payload.path("preferred_username").asText().toLowerCase()
                         : (payload.hasNonNull("username") ? payload.path("username").asText().toLowerCase() : "");
 
-                // 1) Derivacion determinista (uuidv5 sobre el correo institucional).
-                //    Es la misma regla que aplica el portal oficial UTP+Class: no requiere
-                //    configuracion, no hace llamadas de red y funciona para cualquier alumno.
-                //    Se valida una sola vez contra PAO por alumno para no confiar a ciegas:
-                //    si la plataforma cambiara el namespace, se cae a la cascada en vez de 403.
+                // 1) Configuracion explicita del operador (utp.pao-user-map / UTP_PAO_USER_MAP).
                 if (!studentCode.isBlank() && studentPaoUserMap.containsKey(studentCode)) {
                     String known = studentPaoUserMap.get(studentCode);
                     if (known != null && !known.isBlank()) {
                         return known;
                     }
                 }
+                // 2) Derivacion determinista (uuidv5 sobre el correo institucional).
+                //    Es la misma regla que aplica el portal oficial UTP+Class: no requiere
+                //    configuracion, no hace llamadas de red y funciona para cualquier alumno.
+                //    Se usa directamente (fail-open) para no degradar a un identificador
+                //    invalido por un fallo transitorio de red.
+                if (!studentCode.isBlank() && derivedPaoUserMap.containsKey(studentCode)) {
+                    String known = derivedPaoUserMap.get(studentCode);
+                    if (known != null && !known.isBlank()) {
+                        return known;
+                    }
+                }
                 String email = payload.hasNonNull("email") ? payload.path("email").asText() : null;
-                for (String derived : PaoUserIdDeriver.deriveCandidates(email)) {
-                    int status = probePaoUserIdStatus(derived, token);
-                    if (status == 200) {
-                        registerPaoUserId(studentCode, derived);
-                        log.info("[UtpPortalGatewayAdapter] paoUserId derivado y validado contra PAO para el alumno {}",
-                                studentCode);
-                        return derived;
-                    }
-                    if (status == 403 || status == 401) {
-                        // Identidad rechazada: la derivacion no aplica para este alumno.
-                        log.warn("[UtpPortalGatewayAdapter] El paoUserId derivado no es aceptado por PAO para {} "
-                                + "(HTTP {}). Se continua con las vias alternativas de resolucion.", studentCode, status);
-                    } else {
-                        // Sonda no concluyente (red): se asume la derivacion, que es la mejor hipotesis.
-                        registerPaoUserId(studentCode, derived);
-                        return derived;
-                    }
+                String derived = selectValidDerivedId(studentCode, email);
+                if (!derived.isBlank()) {
+                    derivedPaoUserMap.put(studentCode.toLowerCase(), derived);
+                    return derived;
                 }
 
-                // 2) Claim directo: resolucion totalmente automatica si UTP lo expone.
+                // 3) Claim directo del token: solo se acepta si PAO lo valida, para no
+                //    usar identificadores de ejemplo o obsoletos.
                 List<String> claimCandidates = extractPaoUserIdCandidatesFromToken(token);
-                if (!claimCandidates.isEmpty()) {
-                    String studentCodeForClaim = extractStudentCodeFromToken(token);
-                    registerPaoUserId(studentCodeForClaim, claimCandidates.get(0));
-                    return claimCandidates.get(0);
-                }
-
-                // 3) Correspondencia ya conocida (configuracion externa o auto-descubrimiento previo).
-                if (!studentCode.isBlank()) {
-                    String cached = studentPaoUserMap.get(studentCode);
-                    if (cached != null && !cached.isBlank()) {
-                        return cached;
+                for (String claimCandidate : claimCandidates) {
+                    int status = probePaoUserIdStatus(claimCandidate, token);
+                    if (status == 200) {
+                        derivedPaoUserMap.put(studentCode.toLowerCase(), claimCandidate);
+                        log.info("[UtpPortalGatewayAdapter] paoUserId validado desde el claim del token para el alumno {}",
+                                studentCode);
+                        return claimCandidate;
                     }
+                    log.warn("[UtpPortalGatewayAdapter] El claim de paoUserId del alumno {} no es aceptado por PAO (HTTP {}). "
+                            + "Se continua con la derivacion determinista.", studentCode, status);
                 }
 
                 // 4) Auto-descubrimiento validado contra PAO.
@@ -1594,6 +1642,9 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                                             + "Si el codigo es 403, configure la correspondencia PAO del alumno en 'utp.pao-user-map' "
                                             + "(o UTP_PAO_USER_MAP): el 'user-id' debe ser el paoUserId, no el 'sub' del JWT SSO.",
                                     res.statusCode(), syllabusApiUrl, res.body());
+                            if (res.statusCode() == 401 || res.statusCode() == 403) {
+                                invalidatePaoUserId(extractStudentCodeFromToken(effectiveToken), userId);
+                            }
                         }
                     }
                 }
@@ -1604,7 +1655,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 log.info("[UtpPortalGatewayAdapter] Descargando binario PDF desde: {}", safeUri);
                 HttpRequest pdfReq = HttpRequest.newBuilder()
                         .uri(URI.create(safeUri))
-                        .timeout(Duration.ofSeconds(15))
+                        .timeout(Duration.ofSeconds(8))
                         .GET()
                         .build();
 
@@ -1946,6 +1997,9 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                                 + "Si el codigo es 403, configure la correspondencia PAO del alumno en 'utp.pao-user-map' "
                                 + "(o UTP_PAO_USER_MAP): el 'user-id' debe ser el paoUserId, no el 'sub' del JWT SSO.",
                         resp.statusCode(), resp.body());
+                if (resp.statusCode() == 401 || resp.statusCode() == 403) {
+                    invalidatePaoUserId(extractStudentCodeFromToken(effectiveToken), userId);
+                }
             }
         } catch (Exception e) {
             log.error("[UtpPortalGatewayAdapter] Excepción en fetchCalendarActivities: {}", e.getMessage());

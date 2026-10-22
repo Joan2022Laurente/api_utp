@@ -27,7 +27,7 @@ class PaoUserIdResolutionTest {
 
     @SuppressWarnings("unchecked")
     private Map<String, String> registry() throws Exception {
-        Field field = UtpPortalGatewayAdapter.class.getDeclaredField("studentPaoUserMap");
+        Field field = UtpPortalGatewayAdapter.class.getDeclaredField("derivedPaoUserMap");
         field.setAccessible(true);
         return (Map<String, String>) field.get(adapter);
     }
@@ -41,7 +41,7 @@ class PaoUserIdResolutionTest {
     @Test
     @DisplayName("Un claim paoUserId del token se resuelve como candidato (via automatica)")
     void paoUserIdClaimIsExtractedAsCandidate() throws Exception {
-        String token = TestTokens.build("U23307609", 4102444800L,
+        String token = TestTokens.build("U99999999", 4102444800L,
                 java.util.Map.of("paoUserId", "11111111-2222-3333-4444-555555555555"));
 
         @SuppressWarnings("unchecked")
@@ -57,7 +57,7 @@ class PaoUserIdResolutionTest {
     void tokenWithoutPaoClaimHasNoCandidates() throws Exception {
         @SuppressWarnings("unchecked")
         List<String> candidates = (List<String>) method("extractPaoUserIdCandidatesFromToken", String.class)
-                .invoke(adapter, TestTokens.validFor("U23307609"));
+                .invoke(adapter, TestTokens.validFor("U99999999"));
 
         assertTrue(candidates.isEmpty(), "Sin claim paoUserId no debe inventarse un candidato");
     }
@@ -66,10 +66,10 @@ class PaoUserIdResolutionTest {
     @DisplayName("El registro PAO se indexa por codigo de alumno en minusculas (aislamiento multi-tenant)")
     void registryIsIndexedByLowercaseStudentCode() throws Exception {
         method("registerPaoUserId", String.class, String.class)
-                .invoke(adapter, "U23307609", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+                .invoke(adapter, "U99999999", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
 
         Map<String, String> map = registry();
-        assertTrue(map.containsKey("u23307609"), "La clave debe normalizarse a minusculas");
+        assertTrue(map.containsKey("u99999999"), "La clave debe normalizarse a minusculas");
         assertFalse(map.containsKey("current-student"), "No debe existir ninguna clave compartida");
         assertEquals(1, map.size());
     }
@@ -84,19 +84,19 @@ class PaoUserIdResolutionTest {
 
         Map<String, String> map = registry();
         assertEquals("99999999-8888-7777-6666-555555555555", map.get("u21200000"));
-        assertFalse(map.containsKey("u23307609"), "No debe contaminar el registro de otro alumno");
+        assertFalse(map.containsKey("u99999999"), "No debe contaminar el registro de otro alumno");
     }
 
     @Test
     @DisplayName("Cada alumno resuelve su propia identidad: nunca se presta la de otro")
     void studentsNeverShareTheirPaoIdentity() throws Exception {
         method("registerPaoUserId", String.class, String.class)
-                .invoke(adapter, "U23307609", "id-de-alumno-a");
+                .invoke(adapter, "U99999999", "id-de-alumno-a");
         method("registerPaoUserId", String.class, String.class)
                 .invoke(adapter, "U21200000", "id-de-alumno-b");
 
         Map<String, String> map = registry();
-        assertEquals("id-de-alumno-a", map.get("u23307609"));
+        assertEquals("id-de-alumno-a", map.get("u99999999"));
         assertEquals("id-de-alumno-b", map.get("u21200000"));
         assertEquals(2, map.size());
     }
@@ -104,7 +104,7 @@ class PaoUserIdResolutionTest {
     @Test
     @DisplayName("El intento de auto-descubrimiento se cachea por alumno (TTL) para no repetir sondas")
     void discoveryAttemptsAreThrottledPerStudent() throws Exception {
-        String token = TestTokens.validFor("U23307609");
+        String token = TestTokens.validFor("U99999999");
 
         Method discover = method("discoverPaoUserId", String.class, String.class);
         Field attemptsField = UtpPortalGatewayAdapter.class.getDeclaredField("paoDiscoveryAttempts");
@@ -113,8 +113,8 @@ class PaoUserIdResolutionTest {
         Map<String, Long> attempts = (Map<String, Long>) attemptsField.get(adapter);
 
         // El descubrimiento se ejecuta (con sondas reales) pero deja constancia del intento.
-        discover.invoke(adapter, "u23307609", token);
+        discover.invoke(adapter, "U99999999", token);
 
-        assertNotNull(attempts.get("u23307609"), "Debe registrarse el intento de auto-descubrimiento");
+        assertNotNull(attempts.get("u99999999"), "Debe registrarse el intento de auto-descubrimiento");
     }
 }

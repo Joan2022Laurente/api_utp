@@ -55,41 +55,92 @@ public class SyllabusServiceImpl implements SyllabusServicePort {
      * @param token      token de sesion, necesario para resolver la equivalencia
      * @return el sílabo cacheado y completo, o {@link Optional#empty()}
      */
-    private Optional<Syllabus> findCachedSyllabus(String courseCode, String token) {
+    private Optional<Syllabus> findCachedSyllabus(String courseCode, String sectionId, String token) {
         Optional<Syllabus> direct = completeSyllabus(syllabusRepositoryPort.findByCourseCode(courseCode));
         if (direct.isPresent()) {
             return direct;
         }
-        if (courseCode == null || !courseCode.matches("^\\d{4,8}$")) {
-            return Optional.empty();
+        // Claves alternativas: el sectionId recibido (UUID de PAO o numerico del Portal) y el
+        // propio courseCode cuando NO es un codigo de catalogo sino un identificador de seccion.
+        List<String> alternativeKeys = new ArrayList<>();
+        if (sectionId != null && !sectionId.isBlank()) {
+            alternativeKeys.add(sectionId.trim());
         }
+        if (courseCode != null && !courseCode.isBlank() && looksLikeSectionIdentifier(courseCode)) {
+            alternativeKeys.add(courseCode.trim());
+        }
+        for (String key : alternativeKeys) {
+            List<String> resolvedCodes = resolveCatalogCodeCandidates(key, token);
+            log.debug("[SyllabusServiceImpl] Resolución de clave alternativa '{}' -> {}", key, resolvedCodes);
+            for (String candidate : resolvedCodes) {
+                Optional<Syllabus> resolved = completeSyllabus(syllabusRepositoryPort.findByCourseCode(candidate));
+                if (resolved.isPresent()) {
+                    log.info("[SyllabusServiceImpl] Sílabo '{}' localizado en cache mediante su codigo de catálogo '{}'",
+                            courseCode, candidate);
+                    return resolved;
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Indica si la clave consultada parece un identificador de seccion (numerico del Portal o
+     * UUID de PAO) en lugar de un codigo de catalogo del curso.
+     */
+    private boolean looksLikeSectionIdentifier(String key) {
+        String value = key.trim();
+        if (value.matches("^\\d{4,8}$")) {
+            return true;
+        }
+        return value.matches("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
+    }
+
+    /**
+     * Calcula los codigos de catalogo alternativos para una clave de seccion.
+     *
+     * <p>Soporta las dos formas de identificar una seccion:</p>
+     * <ul>
+     *   <li>UUID de PAO (p. ej. {@code 2421dd0b-...}) -> dashboard-courses del alumno.</li>
+     *   <li>Seccion numerica del Portal (p. ej. {@code 56357}) -> resumen oficial de cursos.</li>
+     * </ul>
+     */
+    private List<String> resolveCatalogCodeCandidates(String key, String token) {
+        List<String> candidates = new ArrayList<>();
+        if (key == null || key.isBlank()) {
+            return candidates;
+        }
+        String section = key.trim();
+        // 1) UUID de seccion de PAO -> dashboard-courses del alumno.
         try {
-            // La clave numerica es el identificador de seccion del Portal UTP (p. ej. "56357"),
-            // mientras que la cache se indexa por codigo de catalogo (p. ej. "100000SI82").
-            // El resumen oficial del Portal aporta la equivalencia.
-            CourseSummaryData summary = utpPortalGatewayPort.fetchCourseSummary(OFFICIAL_PERIOD_ID, token);
-            if (summary == null || summary.getCourses() == null) {
-                return Optional.empty();
+            String viaSection = utpPortalGatewayPort.resolveCourseCode(section, null, token);
+            if (viaSection != null && !viaSection.isBlank()
+                    && !viaSection.trim().equalsIgnoreCase(section)
+                    && !candidates.contains(viaSection.trim())) {
+                candidates.add(viaSection.trim());
             }
-            String catalogCode = summary.getCourses().stream()
-                    .filter(c -> courseCode.equals(c.getSection()) || courseCode.equals(c.getCourseId()))
-                    .map(CourseSummaryData.CourseGradeItem::getCourseCode)
-                    .filter(code -> code != null && !code.isBlank())
-                    .findFirst()
-                    .orElse(null);
-            if (catalogCode == null) {
-                return Optional.empty();
-            }
-            Optional<Syllabus> resolved = completeSyllabus(syllabusRepositoryPort.findByCourseCode(catalogCode.trim()));
-            if (resolved.isPresent()) {
-                log.info("[SyllabusServiceImpl] Sílabo '{}' localizado en cache mediante su codigo de catálogo '{}'",
-                        courseCode, catalogCode.trim());
-            }
-            return resolved;
         } catch (Exception e) {
-            log.debug("[SyllabusServiceImpl] No se pudo resolver el codigo de catálogo para '{}': {}", courseCode, e.getMessage());
-            return Optional.empty();
+            log.debug("[SyllabusServiceImpl] No se pudo resolver el course code desde la sección '{}': {}",
+                    section, e.toString());
         }
+        // 2) Seccion numerica del Portal -> resumen oficial de cursos.
+        if (section.matches("^\\d{4,8}$")) {
+            try {
+                CourseSummaryData summary = utpPortalGatewayPort.fetchCourseSummary(OFFICIAL_PERIOD_ID, token);
+                if (summary != null && summary.getCourses() != null) {
+                    summary.getCourses().stream()
+                            .filter(c -> section.equals(c.getSection()) || section.equals(c.getCourseId()))
+                            .map(CourseSummaryData.CourseGradeItem::getCourseCode)
+                            .filter(code -> code != null && !code.isBlank())
+                            .map(String::trim)
+                            .filter(code -> !candidates.contains(code) && !code.equalsIgnoreCase(section))
+                            .forEach(candidates::add);
+                }
+            } catch (Exception e) {
+                log.debug("[SyllabusServiceImpl] No se pudo resolver el course code desde el Portal para '{}': {}", section, e.getMessage());
+            }
+        }
+        return candidates;
     }
 
     /**
@@ -107,7 +158,7 @@ public class SyllabusServiceImpl implements SyllabusServicePort {
 
     @Override
     public Syllabus getSyllabus(String courseCode, String sectionId, String pdfUrl, String token) {
-        return findCachedSyllabus(courseCode, token)
+        return findCachedSyllabus(courseCode, sectionId, token)
                 .orElseGet(() -> {
                     String target = (pdfUrl != null && !pdfUrl.isBlank()) ? pdfUrl :
                                    (sectionId != null && !sectionId.isBlank()) ? sectionId : courseCode;

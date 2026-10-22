@@ -385,3 +385,28 @@ uuidv5("6ba7b810-9dad-11d1-80b4-00c04fd430c8", "U23307609@UTP.EDU.PE")
 - **Acoplamiento:** si UTP cambiase el namespace, la derivacion dejaria de ser valida. Por
   eso el namespace es configurable con `UTP_PAO_UUID_NAMESPACE` y la derivacion es solo el
   primer paso de la cascada: si falla, se prueban los siguientes.
+
+### Migracion opcional de la tabla `official_syllabi` (fidelidad 1:1)
+
+El cliente de Supabase funciona sin cambios de esquema: si las columnas opcionales no
+existen, el `upsert` reintenta automaticamente con el conjunto base de columnas. Para
+almacenar el silabo completo (y que la lectura no pierda `semester`, `careers`,
+`aiPolicy` ni `maxSimilarityPercent`), basta con anadir estas columnas **aditivas**
+(no modifican ni borran datos existentes):
+
+```sql
+ALTER TABLE public.official_syllabi
+  ADD COLUMN IF NOT EXISTS raw_json               jsonb,
+  ADD COLUMN IF NOT EXISTS careers                jsonb,
+  ADD COLUMN IF NOT EXISTS semester               text,
+  ADD COLUMN IF NOT EXISTS ai_policy              text,
+  ADD COLUMN IF NOT EXISTS max_similarity_percent integer;
+```
+
+Con `raw_json` presente, la lectura se reconstruye desde el silabo completo almacenado y
+el JSON servido es identico al generado en vivo (mismos campos, mismo orden). Sin ella,
+la lectura por columnas cubre formula, evaluaciones, cronograma, reglas y learning goal.
+
+El `upsert` es **idempotente**: si el contenido almacenado es equivalente al nuevo no se
+reescribe la fila, de modo que `updated_at` sigue siendo el indicador real de la ultima
+regeneracion.

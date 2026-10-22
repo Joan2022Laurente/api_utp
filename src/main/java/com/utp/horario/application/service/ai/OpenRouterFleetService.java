@@ -34,6 +34,21 @@ public class OpenRouterFleetService {
 
     private final AtomicInteger currentKeyIndex = new AtomicInteger(0);
 
+    /**
+     * Presupuesto total de tiempo para la extraccion por IA.
+     *
+     * <p>El router de Heroku aborta las peticiones a los 30 s con HTTP 503. La IA no puede
+     * consumir mas de este presupuesto, de modo que el cold path completo (descarga del PDF
+     * + IA + parseo determinista de respaldo) siempre cabe dentro del limite de la
+     * plataforma y responde 200 con el sobre estandar.</p>
+     */
+    static final long AI_TOTAL_BUDGET_MILLIS = 12_000L;
+
+    /**
+     * Timeout maximo por intento de llamada a OpenRouter (nunca excede el presupuesto restante).
+     */
+    static final long AI_ATTEMPT_TIMEOUT_MILLIS = 8_000L;
+
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(8))
             .build();
@@ -102,9 +117,21 @@ public class OpenRouterFleetService {
 
         int totalKeys = properties.getKeys().size();
         int attempts = 0;
-        int maxAttempts = Math.min(totalKeys, 2);
+        int maxAttempts = Math.min(totalKeys, 3);
+
+        // Presupuesto de tiempo DURO para la extraccion por IA.
+        // El router de Heroku corta la peticion a los 30 s y devuelve 503; por tanto la IA
+        // nunca puede consumir mas de AI_TOTAL_BUDGET_MILLIS, dejando margen para la
+        // descarga del PDF y el parseo determinista de respaldo.
+        long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(AI_TOTAL_BUDGET_MILLIS);
 
         while (attempts < maxAttempts) {
+            long remainingMillis = TimeUnit.NANOSECONDS.toMillis(deadlineNanos - System.nanoTime());
+            if (remainingMillis <= 500) {
+                log.warn("[OpenRouterFleet] Presupuesto de tiempo de IA agotado ({} ms). Se continua con el fallback determinista.",
+                        AI_TOTAL_BUDGET_MILLIS);
+                break;
+            }
             attempts++;
             int keyIdx = Math.abs(currentKeyIndex.get() % totalKeys);
             String apiKey = properties.getKeys().get(keyIdx);
@@ -115,6 +142,10 @@ public class OpenRouterFleetService {
             String effectiveModel = dynamicModels.isEmpty()
                     ? primaryModel
                     : dynamicModels.get((attempts - 1) % dynamicModels.size());
+
+            // El timeout por intento nunca excede el presupuesto restante.
+            long attemptTimeoutMillis = Math.min(AI_ATTEMPT_TIMEOUT_MILLIS, remainingMillis);
+            Duration attemptTimeout = Duration.ofMillis(Math.max(500, attemptTimeoutMillis));
 
             try {
                 log.info("[OpenRouterFleet] 🤖 Solicitando extracción IA: Modelo='{}' (Fallbacks: {}) usando Clave #{}/{} ({})",
@@ -135,7 +166,7 @@ public class OpenRouterFleetService {
 
                 HttpRequest request = HttpRequest.newBuilder()
                         .uri(URI.create(properties.getApiUrl() + "/chat/completions"))
-                        .timeout(Duration.ofSeconds(18))
+                        .timeout(attemptTimeout)
                         .header("Authorization", "Bearer " + apiKey)
                         .header("Content-Type", "application/json")
                         .header("HTTP-Referer", "https://utp-academic-gateway.local")
@@ -144,7 +175,7 @@ public class OpenRouterFleetService {
                         .build();
 
                 HttpResponse<String> response = httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
-                        .get(18, TimeUnit.SECONDS);
+                        .get(attemptTimeout.toMillis(), TimeUnit.MILLISECONDS);
 
                 if (response.statusCode() == 200) {
                     JsonNode resJson = objectMapper.readTree(response.body());
