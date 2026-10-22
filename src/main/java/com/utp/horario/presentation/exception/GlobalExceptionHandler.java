@@ -14,6 +14,9 @@ import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+
+import java.util.ArrayList;
+import java.util.List;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.NoHandlerFoundException;
@@ -51,10 +54,18 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiResponse<Void>> handleValidationException(MethodArgumentNotValidException e) {
-        String errorMessage = e.getBindingResult().getFieldErrors().stream()
-                .map(err -> err.getField() + ": " + err.getDefaultMessage())
-                .reduce((m1, m2) -> m1 + "; " + m2)
-                .orElse("Parámetros de solicitud inválidos");
+        List<String> messages = new ArrayList<>();
+        e.getBindingResult().getFieldErrors().forEach(err -> messages.add(
+                err.getField() == null || err.getField().isBlank()
+                        ? err.getDefaultMessage()
+                        : err.getField() + ": " + err.getDefaultMessage()));
+        // Las validaciones a nivel de clase (por ejemplo, "credenciales o token") no tienen
+        // campo asociado: su detalle se informa sin el prefijo del campo.
+        e.getBindingResult().getGlobalErrors().forEach(err -> messages.add(err.getDefaultMessage()));
+
+        String errorMessage = messages.isEmpty()
+                ? "Parámetros de solicitud inválidos"
+                : String.join("; ", messages);
         return badRequest(errorMessage);
     }
 

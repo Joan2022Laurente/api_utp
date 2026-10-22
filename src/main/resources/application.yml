@@ -52,6 +52,25 @@ utp:
   # del correo institucional. Se mantiene como respaldo/excepcion.
   # Fallback: variable de entorno UTP_PAO_USER_MAP.
   pao-user-map: ${UTP_PAO_USER_MAP:}
+  # Verificacion criptografica de la firma de los tokens del SSO (realm Xpedition).
+  # Modos: off (no verifica) | audit (verifica y registra, no rechaza) | enforce (rechaza con 401).
+  # Se cambia en caliente con 'heroku config:set UTP_JWT_MODE=enforce', sin redesplegar.
+  security:
+    jwt:
+      mode: ${UTP_JWT_MODE:off}
+      issuer: ${UTP_JWT_ISSUER:https://sso.utp.edu.pe/auth/realms/Xpedition}
+      jwks-url: ${UTP_JWT_JWKS_URL:https://sso.utp.edu.pe/auth/realms/Xpedition/protocol/openid-connect/certs}
+      jwks-cache-ttl-seconds: ${UTP_JWT_JWKS_TTL:21600}
+      jwks-timeout-seconds: ${UTP_JWT_JWKS_TIMEOUT:3}
+      clock-skew-seconds: ${UTP_JWT_CLOCK_SKEW:60}
+      # Si el JWKS no se puede descargar (caida del SSO), la peticion no se rechaza.
+      fail-open: ${UTP_JWT_FAIL_OPEN:true}
+    # Limite de intentos de autenticacion (fuerza bruta contra el SSO institucional).
+    rate-limit:
+      enabled: ${UTP_RATE_LIMIT_ENABLED:true}
+      max-requests-per-window: ${UTP_RATE_LIMIT_MAX_REQUESTS:10}
+      max-failures-per-window: ${UTP_RATE_LIMIT_MAX_FAILURES:5}
+      window-seconds: ${UTP_RATE_LIMIT_WINDOW:60}
 
 app:
   jwt:

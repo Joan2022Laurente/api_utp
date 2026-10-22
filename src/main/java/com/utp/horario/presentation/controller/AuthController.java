@@ -28,10 +28,20 @@ public class AuthController {
 
     private final AuthenticateStudentUseCase authenticateStudentUseCase;
 
-    @Operation(summary = "Iniciar sesión institucional", description = "Autentica al estudiante con su código y contraseña UTP contra el SSO Keycloak. Retorna el perfil y los tokens de sesión (access_token y refresh_token).")
+    @Operation(summary = "Iniciar sesión institucional",
+            description = "Autentica al estudiante con su código y contraseña UTP contra el SSO Keycloak. "
+                    + "También acepta un token de sesión vigente en lugar de credenciales, para renovar la sesión sin volver a Authenticarse. "
+                    + "Retorna el perfil y los tokens de sesión (access_token y refresh_token).")
     @PostMapping("/login")
     public ResponseEntity<ApiResponse<StudentProfile>> login(@Valid @RequestBody LoginRequest request) {
-        StudentProfile profile = authenticateStudentUseCase.authenticateWithCredentials(request.getUsername(), request.getPassword());
+        StudentProfile profile;
+        if (request.getToken() != null && !request.getToken().isBlank()) {
+            // Renovacion de sesion a partir de un token vigente: no se requieren credenciales.
+            profile = authenticateStudentUseCase.authenticateWithToken(request.getToken().trim());
+        } else {
+            profile = authenticateStudentUseCase.authenticateWithCredentials(
+                    request.getUsername(), request.getPassword());
+        }
         return ResponseEntity.ok(ApiResponse.ok("Autenticación exitosa", profile));
     }
 

@@ -45,7 +45,13 @@ public class ScheduleController {
             effectiveToken = authHeader.substring(7).trim();
         }
         ScheduleInterval synced = scheduleServicePort.syncScheduleFromUtp(effectiveToken, period);
-        return ResponseEntity.ok(ApiResponse.ok("Horario sincronizado con UTP", synced));
+        return ResponseEntity.ok()
+                // El token en la URL queda expuesto en los registros del servidor y en la
+                // cabecera 'Referer': la respuesta no debe almacenarse en ningun cache.
+                .header("Cache-Control", "no-store")
+                .header("Warning", "299 - \"El token en el parametro 'token' esta obsoleto: "
+                        + "envielo en la cabecera 'Authorization: Bearer <token>'. Se acepta por compatibilidad.\"")
+                .body(ApiResponse.ok("Horario sincronizado con UTP", synced));
     }
 
     @Operation(summary = "Exportar horario en formato estándar iCalendar (.ics)", description = "Genera un archivo RFC 5545 descargable compatible con Google Calendar, Apple Calendar y Microsoft Outlook con todas las sesiones de clases del periodo.")

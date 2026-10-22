@@ -7,6 +7,7 @@ import com.utp.horario.presentation.dto.LoginRequest;
 import com.utp.horario.presentation.dto.RefreshTokenRequest;
 import com.utp.horario.presentation.exception.GlobalExceptionHandler;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.springframework.http.MediaType;
@@ -79,6 +80,45 @@ class AuthControllerTest {
                 .username("invalido")
                 .password("")
                 .build();
+
+        mockMvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false));
+    }
+
+    @Test
+    @DisplayName("El login acepta un token de sesion vigente en lugar de credenciales")
+    void login_withToken_returnsProfileWithoutCredentials() throws Exception {
+        StudentProfile mockProfile = StudentProfile.builder()
+                .id("sub-u99999999")
+                .studentCode("U99999999")
+                .fullName("JUAN PEREZ")
+                .email("u99999999@utp.edu.pe")
+                .token("jwt.access.token")
+                .build();
+
+        when(authenticateStudentUseCase.authenticateWithToken("jwt.access.token"))
+                .thenReturn(mockProfile);
+
+        LoginRequest request = LoginRequest.builder()
+                .token("jwt.access.token")
+                .build();
+
+        mockMvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.studentCode").value("U99999999"))
+                .andExpect(jsonPath("$.data.token").value("jwt.access.token"));
+    }
+
+    @Test
+    @DisplayName("El login sin credenciales ni token responde 400")
+    void login_withoutCredentialsOrToken_returns400() throws Exception {
+        LoginRequest request = LoginRequest.builder().build();
 
         mockMvc.perform(post("/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)

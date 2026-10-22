@@ -35,6 +35,18 @@ En caso de error (`4xx` o `5xx`):
 - **Token Fallback en Memoria (aislado por estudiante):** Tras un `POST /auth/login` exitoso, el gateway retiene la sesión activa **indexada por el código de alumno del propio estudiante**. Las consultas posteriores (como `/syllabus/{courseCode}`) pueden omitir el header **siempre que la petición se atribuya a ese mismo estudiante**.
 - **Prohibición explícita de préstamo de tokens:** una petición **sin token propio nunca adopta el token de otro usuario**. El token no es un recurso global de la instancia: no existe un campo `lastActiveToken` compartido. Cuando la petición no incluye credenciales propias, la resolución contra el portal UTP+ Class se omite y el endpoint degrada de forma segura (caché de base de datos disponible o sílabo vacío).
 - **Vigencia del token:** los tokens expirados (`exp`), todavía no vigentes (`nbf`) o manipulados se rechazan con `401 Unauthorized`.
+- **Verificación criptográfica de la firma (RS256 contra el JWKS del realm):** el gateway valida la firma del token contra la clave pública que publica el SSO Keycloak en
+  `https://sso.utp.edu.pe/auth/realms/Xpedition/protocol/openid-connect/certs`, además de comprobar `iss` y `exp`. Se rechazan expresamente los algoritmos `none` y los HMAC (`HS256`).
+  Un token fabricado a mano (por ejemplo, con el `preferred_username` de la víctima) se responde con `401 Unauthorized` y el sobre `ApiResponse`.
+  - Modo de operación, controlado por la variable de entorno `UTP_JWT_MODE`:
+    | Modo | Comportamiento |
+    |---|---|
+    | `off` | No se verifica la firma (valor por defecto). |
+    | `audit` | Se verifica y se registra el resultado, pero **ninguna petición se rechaza**. Permite observar en producción que el 100% de los tokens reales superan la validación. |
+    | `enforce` | Un token cuya firma no cuadra se responde con `401 Unauthorized`. |
+  - Si el JWKS no puede descargarse por una caída de red, el gateway **no invalida las sesiones** (comportamiento *fail-open*) y deja constancia en el log.
+  - **Una petición sin token no cambia de comportamiento** en ningún modo: la verificación afecta únicamente a los tokens que se presentan y no superan la validación.
+- **Límite de intentos de autenticación:** `POST /auth/login` aplica un límite por dirección IP de origen (leída de `X-Forwarded-For`). Superado el límite, la respuesta es `429 Too Many Requests` con la cabecera `Retry-After`.
 
 ### 1.3 Códigos de Estado y Códigos de Error
 Todo error se serializa en el mismo sobre `ApiResponse<T>` (nunca en la página HTML de error de Spring Boot):
@@ -43,11 +55,12 @@ Todo error se serializa en el mismo sobre `ApiResponse<T>` (nunca en la página 
 |---|---|---|
 | `200 OK` | Operación exitosa | — |
 | `400 Bad Request` | Validación de entrada | Payload inválido, parámetro obligatorio ausente, tipo de parámetro incorrecto, JSON malformado |
-| `401 Unauthorized` | Credenciales inválidas | Credenciales UTP rechazadas, token ausente/expirado/manipulado |
+| `401 Unauthorized` | Credenciales inválidas | Credenciales UTP rechazadas, token ausente/expirado/manipulado, firma que no fue emitida por el SSO |
 | `403 Forbidden` | Acceso denegado con identidad válida | Consulta del perfil de otro estudiante |
 | `404 Not Found` | Recurso inexistente | Estudiante, curso o periodo no encontrado |
 | `405 Method Not Allowed` | Verbo HTTP no soportado | — |
 | `415 Unsupported Media Type` | Content-Type no soportado | — |
+| `429 Too Many Requests` | Demasiados intentos de autenticación | Límite por IP en `POST /auth/login` |
 | `502 Bad Gateway` | Dependencia externa no disponible | SSO Keycloak UTP, Portal GraphQL, PAO Calendar, AWS S3 |
 | `500 Internal Server Error` | Fallo imprevisto | Nunca se filtra la traza al cliente |
 
@@ -176,8 +189,15 @@ Lista todos los sílabos matriculados o almacenados del estudiante autenticado.
 
 - **Método:** `GET`
 - **Ruta:** `/syllabus`
+- **Query Params:**
+  - `studentId` *(string, opcional, por defecto `current-student`)*: código del estudiante.
+  - `scope` *(string, opcional, por defecto `all`)*: `all` devuelve el catálogo completo (comportamiento histórico); `student` restringe el resultado a los cursos en los que el estudiante está matriculado.
+  - `period` *(string, opcional, por defecto `2026 - Ciclo 2 Agosto`)*: periodo académico usado para resolver la matrícula.
 - **Headers:** `Authorization: Bearer <token>`
 - **Respuesta:** `ApiResponse<List<Syllabus>>` con los sílabos del periodo.
+
+> El valor por defecto de `scope` es `all`: el contrato previo no se altera en ningún caso. El
+> alcance `student` es una vía opcional que las apps existentes no necesitan usar.
 
 ---
 
@@ -200,13 +220,22 @@ Extrae el texto plano crudo directo del binario PDF del sílabo alojado en S3 UT
 ### 3.1 `POST /auth/login`
 Autentica al estudiante contra el SSO Keycloak institucional de UTP.
 - **Método:** `POST`
-- **Body:**
+- **Body (forma 1, credenciales):**
   ```json
   {
     "username": "U21200000",
     "password": "tu_password_utp"
   }
   ```
+- **Body (forma 2, token vigente):** se acepta indistintamente un token de sesión en lugar de
+  credenciales, para renovar la sesión sin volver a autenticarse:
+  ```json
+  {
+    "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...."
+  }
+  ```
+  Si se envía `token`, no se requieren `username` ni `password`. Si no se envía ninguno de los
+  dos, la respuesta es `400 Bad Request`.
 - **Respuesta (`200 OK`):**
   ```json
   {
@@ -248,6 +277,22 @@ Obtiene las sesiones semanales, horarios, aulas y docentes del estudiante.
 ### 4.2 `GET /schedule/export.ics`
 Genera el calendario descargable en formato estándar RFC 5545 compatible con Google Calendar, Apple Calendar y Outlook.
 - **Content-Type producido:** `text/calendar; charset=utf-8`
+
+### 4.3 `POST /schedule/sync`
+Sincroniza el horario del estudiante contra el portal UTP+ Class y devuelve el intervalo actualizado.
+
+- **Método:** `POST`
+- **Query Params:**
+  - `period` *(string, default: `"2026 - Ciclo 2 Agosto"`)*
+  - `token` *(string, opcional, **obsoleto**)*: token de sesión como parámetro de URL.
+- **Header:** `Authorization: Bearer <token>`
+- **Respuesta:** `ApiResponse<ScheduleInterval>`.
+
+> **El parámetro `token` en la URL está obsoleto.** Se sigue aceptando por compatibilidad con
+> los clientes existentes, pero el token queda expuesto en los registros del servidor y en la
+> cabecera `Referer`. La respuesta incluye `Cache-Control: no-store` y una cabecera `Warning: 299`
+> avisando del uso preferente de la cabecera `Authorization`. El token recibido por cualquiera de
+> los dos caminos se verifica con la misma comprobación de firma que el resto de endpoints.
 
 ---
 

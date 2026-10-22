@@ -6,8 +6,10 @@ import com.utp.horario.domain.exception.ResourceNotFoundException;
 import com.utp.horario.domain.model.StudentProfile;
 import com.utp.horario.domain.port.in.AuthenticateStudentUseCase;
 import com.utp.horario.domain.port.out.StudentRepositoryPort;
+import com.utp.horario.domain.port.out.TokenSignatureVerifierPort;
 import com.utp.horario.domain.port.out.UtpPortalGatewayPort;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -18,6 +20,19 @@ public class AuthenticateStudentUseCaseImpl implements AuthenticateStudentUseCas
 
     private final StudentRepositoryPort studentRepositoryPort;
     private final UtpPortalGatewayPort utpPortalGatewayPort;
+
+    /**
+     * Verificador de firma del token. Es opcional: si no esta disponible (por ejemplo en
+     * pruebas unitarias) el token se inspecciona como antes. Cuando si esta disponible y
+     * la verificacion esta activa, un token que no fue emitido por el SSO institucional se
+     * rechaza antes de resolver la identidad del estudiante.
+     */
+    private TokenSignatureVerifierPort tokenSignatureVerifierPort;
+
+    @Autowired(required = false)
+    public void setTokenSignatureVerifierPort(TokenSignatureVerifierPort tokenSignatureVerifierPort) {
+        this.tokenSignatureVerifierPort = tokenSignatureVerifierPort;
+    }
 
     @Override
     public StudentProfile authenticateWithCredentials(String username, String password) {
@@ -34,6 +49,11 @@ public class AuthenticateStudentUseCaseImpl implements AuthenticateStudentUseCas
      */
     @Override
     public StudentProfile authenticateWithToken(String token) {
+        if (tokenSignatureVerifierPort != null
+                && tokenSignatureVerifierPort.check(token) == TokenSignatureVerifierPort.Status.INVALID) {
+            throw new AuthenticationException(
+                    "El token de sesion no fue emitido por el SSO institucional o su firma no es valida.");
+        }
         SessionTokenInspector.SessionClaims claims = SessionTokenInspector.inspect(token);
         String studentCode = claims.studentCode();
 

@@ -410,3 +410,40 @@ la lectura por columnas cubre formula, evaluaciones, cronograma, reglas y learni
 El `upsert` es **idempotente**: si el contenido almacenado es equivalente al nuevo no se
 reescribe la fila, de modo que `updated_at` sigue siendo el indicador real de la ultima
 regeneracion.
+
+### Verificacion de la firma del token (seguridad)
+
+La pasarela valida la firma RS256 de los tokens del SSO Keycloak (realm `Xpedition`) contra
+el JWKS publico del realm. Un token fabricado a mano, con el `preferred_username` de la
+victima, se rechaza con `401 Unauthorized` en lugar de devolver su perfil.
+
+El modo se controla con la variable de entorno `UTP_JWT_MODE` y puede cambiarse en caliente
+**sin redesplegar**:
+
+| Modo | Efecto |
+|---|---|
+| `off` | No se verifica la firma (valor por defecto). |
+| `audit` | Se verifica y se registra, pero ninguna peticion se rechaza. |
+| `enforce` | Una firma invalida se responde con `401 Unauthorized`. |
+
+Procedimiento recomendado para produccion:
+
+```bash
+heroku config:set UTP_JWT_MODE=audit      # observar un dia con la app real
+heroku logs --app utp-academic-gateway -s jwt    # revisar que no hay rechazos legítimos
+heroku config:set UTP_JWT_MODE=enforce    # activar el rechazo
+heroku config:set UTP_JWT_MODE=off        # rollback inmediato si algo falla
+```
+
+Variables relacionadas:
+
+| Variable | Default | Descripcion |
+|---|---|---|
+| `UTP_JWT_MODE` | `off` | Modo de verificacion de firma (`off`, `audit`, `enforce`). |
+| `UTP_JWT_ISSUER` | `https://sso.utp.edu.pe/auth/realms/Xpedition` | Emisor esperado (`iss`). |
+| `UTP_JWT_JWKS_URL` | endpoint `/protocol/openid-connect/certs` del realm | URL del JWKS. |
+| `UTP_JWT_JWKS_TTL` | `21600` | Vida de la cache de claves publicas, en segundos. |
+| `UTP_JWT_FAIL_OPEN` | `true` | Si el JWKS no se puede descargar, no se invalida la sesion. |
+| `UTP_RATE_LIMIT_ENABLED` | `true` | Activa el limite de intentos de autenticacion. |
+| `UTP_RATE_LIMIT_MAX_REQUESTS` | `10` | Intentos por IP y ventana en `POST /auth/login`. |
+| `UTP_RATE_LIMIT_MAX_FAILURES` | `5` | Intentos fallidos por IP y ventana en `POST /auth/login`. |
