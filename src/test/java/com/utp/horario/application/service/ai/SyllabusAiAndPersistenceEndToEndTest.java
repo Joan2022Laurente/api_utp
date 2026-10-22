@@ -122,6 +122,9 @@ class SyllabusAiAndPersistenceEndToEndTest {
 
         // Verificar que NO se intentó descargar el PDF de la UTP ya que estaba en caché de BD
         Mockito.verifyNoInteractions(gatewayPortMock);
+
+        // Limpiar el artefacto de prueba para no dejar filas de test en la base real.
+        cleanupTestCourse(code);
     }
 
     @Test

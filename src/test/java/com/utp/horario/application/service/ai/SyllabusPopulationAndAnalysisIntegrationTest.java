@@ -106,6 +106,13 @@ public class SyllabusPopulationAndAnalysisIntegrationTest {
     @Test
     @DisplayName("Poblar BD Dedicada con Sílabos Oficiales y Ejecutar Análisis Exhaustivo de Calidad")
     void populateAndAnalyzeDedicatedDatabase() throws Exception {
+        // Esta prueba ESCRIBE en la tabla real de silabos. Para que `mvn test` nunca mute
+        // datos de produccion por sorpresa, requiere un opt-in explicito:
+        //   ./mvnw test -Dpopulate.syllabi=true
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                Boolean.parseBoolean(System.getProperty("populate.syllabi", "false")),
+                "La prueba poblaria la tabla real de silabos: requiere -Dpopulate.syllabi=true para ejecutarse.");
+
         // Prueba de integración real: requiere Supabase (persistencia) y OpenRouter (extracción).
         org.junit.jupiter.api.Assumptions.assumeTrue(
                 com.utp.horario.support.ExternalServices.isSupabaseReachable()

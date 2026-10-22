@@ -3,6 +3,7 @@ package com.utp.horario.infrastructure.persistence.supabase;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.utp.horario.domain.model.Syllabus;
 import com.utp.horario.infrastructure.config.supabase.SupabaseProperties;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -18,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class SupabaseSyllabusClientTest {
 
     private SupabaseSyllabusClient client;
+    private static final String TEST_COURSE_CODE = "100000TEST_UNIT";
 
     @BeforeEach
     void setUp() {
@@ -25,6 +27,28 @@ class SupabaseSyllabusClientTest {
         properties.initFallbackKeys();
         ObjectMapper objectMapper = new ObjectMapper();
         client = new SupabaseSyllabusClient(properties, objectMapper);
+    }
+
+    /**
+     * Limpia el registro de prueba para no dejar artefactos en la base de datos real.
+     */
+    @AfterEach
+    void tearDown() {
+        try {
+            java.net.http.HttpClient http = java.net.http.HttpClient.newHttpClient();
+            SupabaseProperties properties = new SupabaseProperties();
+            properties.initFallbackKeys();
+            java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder()
+                    .uri(java.net.URI.create(properties.getUrl() + "/rest/v1/" + properties.getTable()
+                            + "?course_code=eq." + TEST_COURSE_CODE))
+                    .header("apikey", properties.getServiceRoleKey())
+                    .header("Authorization", "Bearer " + properties.getServiceRoleKey())
+                    .DELETE()
+                    .build();
+            http.send(request, java.net.http.HttpResponse.BodyHandlers.ofString());
+        } catch (Exception ignored) {
+            // La limpieza es best effort: nunca debe hacer fallar la prueba.
+        }
     }
 
     @Test
@@ -35,7 +59,7 @@ class SupabaseSyllabusClientTest {
                 com.utp.horario.support.ExternalServices.isSupabaseReachable(),
                 "Supabase no es alcanzable desde este entorno: se omite la prueba de integración en red.");
 
-        String testCode = "100000TEST_UNIT";
+        String testCode = TEST_COURSE_CODE;
         Syllabus sample = Syllabus.builder()
                 .id(testCode)
                 .courseCode(testCode)

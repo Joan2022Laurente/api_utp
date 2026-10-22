@@ -8,7 +8,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-
 @Slf4j
 public class SyllabusFormulaParser {
 
@@ -19,6 +18,16 @@ public class SyllabusFormulaParser {
 
     private static final Pattern WEIGHT_TERM_PATTERN = Pattern.compile(
             "\\((\\d{1,2})%\\)\\s*([A-Za-zÁÉÍÓÚáéíóú0-9_\\-]+)",
+            Pattern.CASE_INSENSITIVE
+    );
+
+    /**
+     * Formato oficial del Portal UTP: {@code 20%*[APF1] + 20%*[APF2] + 40%*[PROY]}.
+     * A diferencia del formato impreso en el PDF ({@code (20%)APF1 + ...}), aqui el
+     * porcentaje precede al identificador de la evaluacion.
+     */
+    private static final Pattern OFFICIAL_WEIGHT_TERM_PATTERN = Pattern.compile(
+            "(\\d{1,3})\\s*%\\s*\\*?\\s*\\[?\\s*([A-Za-zÁÉÍÓÚáéíóú0-9_\\-]+)\\s*\\]?",
             Pattern.CASE_INSENSITIVE
     );
 
@@ -69,5 +78,33 @@ public class SyllabusFormulaParser {
         }
 
         return new FormulaParseResult(rawFormula, terms, weightMap, totalPercent, isValid);
+    }
+
+    /**
+     * Extrae los pesos oficiales de evaluacion de la formula del Portal UTP.
+     *
+     * <p>Formato de entrada: {@code 10%*[ATI1] + 20%*[ATI2] + 20%*[ATI3] + 20%*[PA] + 30%*[TI]}.</p>
+     *
+     * @param formula formula oficial (puede ser nula o vacia)
+     * @return mapa codigo de evaluacion (mayusculas) -> porcentaje; vacio si no se pudo interpretar.
+     */
+    public static Map<String, Integer> parseOfficialWeights(String formula) {
+        Map<String, Integer> weights = new LinkedHashMap<>();
+        if (formula == null || formula.isBlank()) {
+            return weights;
+        }
+        Matcher matcher = OFFICIAL_WEIGHT_TERM_PATTERN.matcher(formula);
+        while (matcher.find()) {
+            try {
+                int weight = Integer.parseInt(matcher.group(1).trim());
+                String label = matcher.group(2).trim().toUpperCase();
+                if (!label.isEmpty()) {
+                    weights.putIfAbsent(label, weight);
+                }
+            } catch (NumberFormatException ignored) {
+                // Termino no numerico: se ignora sin abortar el resto de la formula.
+            }
+        }
+        return weights;
     }
 }
