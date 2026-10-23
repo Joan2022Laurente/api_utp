@@ -153,6 +153,25 @@ Recupera el sílabo rector estructurado con evaluaciones normalizadas, fórmulas
 > - **Ciclo de Verano:** 8 a 9 semanas reales (sin semanas inventadas 10 a 18).
 > - **Cursos Modulares:** 4 a 8 semanas.
 
+#### Respuesta ante Ausencia del Documento Oficial (`502 Bad Gateway`):
+
+> **Regla de honestidad de datos:** cuando el Portal no entrega el PDF oficial y no existe copia
+> válida en caché, `GET /syllabus/{courseCode}` y `GET /syllabus/{courseCode}/markdown` responden
+> **502** con el sobre estándar (`success:false`, `data:null`) y **sin fabricar** ningún sílabo
+> (ni créditos, modalidad u horas por defecto):
+>
+> ```json
+> {
+>   "success": false,
+>   "message": "Sílabo no disponible para '{courseCode}': el Portal UTP no entregó el documento oficial. Reintenta más tarde.",
+>   "error": "Sílabo no disponible para '{courseCode}': el Portal UTP no entregó el documento oficial. Reintenta más tarde.",
+>   "data": null
+> }
+> ```
+>
+> Los clientes deben tratar esta respuesta como estado transitorio reintentable, nunca como un
+> sílabo oficial vacío.
+
 ---
 
 ### 2.2 `GET /syllabus/{courseCode}/markdown`

@@ -6,6 +6,7 @@ import com.utp.horario.application.service.ai.SyllabusPdfToMarkdownSanitizer;
 import com.utp.horario.application.service.export.SyllabusMarkdownExporter;
 import com.utp.horario.application.service.formula.SyllabusFormulaParser;
 import com.utp.horario.application.service.validation.SyllabusDeterministicValidator;
+import com.utp.horario.domain.exception.UpstreamServiceException;
 import com.utp.horario.domain.model.CourseSummaryData;
 import com.utp.horario.domain.model.Syllabus;
 import com.utp.horario.domain.model.SyllabusEvaluation;
@@ -214,8 +215,13 @@ public class SyllabusServiceImpl implements SyllabusServicePort {
                         return parsed;
                     }
 
-                    // Si no se pudo descargar el PDF oficial, devolver objeto base limpio sin persistir como definitivo
-                    return syllabusParserEngine.parse("", courseCode);
+                    // Regla de honestidad de datos: sin documento oficial no existe sílabo que
+                    // presentar. Se responde una ausencia explícita (HTTP 502 con sobre
+                    // success:false vía GlobalExceptionHandler) en lugar de fabricar un
+                    // objeto con créditos, modalidad u horas por defecto para parse("").
+                    throw new UpstreamServiceException(
+                            "Sílabo no disponible para '" + courseCode
+                                    + "': el Portal UTP no entregó el documento oficial. Reintenta más tarde.");
                 });
     }
 

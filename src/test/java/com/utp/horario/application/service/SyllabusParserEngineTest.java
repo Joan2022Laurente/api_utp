@@ -1,5 +1,6 @@
 package com.utp.horario.application.service;
 
+import com.utp.horario.domain.exception.UpstreamServiceException;
 import com.utp.horario.domain.model.Syllabus;
 import com.utp.horario.domain.model.SyllabusEvaluation;
 import org.junit.jupiter.api.BeforeEach;
@@ -103,13 +104,11 @@ class SyllabusParserEngineTest {
     }
 
     @Test
-    @DisplayName("Debe manejar texto vacío o nulo generando un objeto base seguro")
-    void shouldHandleEmptyOrNullInputGracefully() {
-        Syllabus emptyResult = parserEngine.parse(null, "100000TEST");
-        assertNotNull(emptyResult);
-        assertEquals("100000TEST", emptyResult.getCourseCode());
-        assertEquals("ASIGNATURA UTP", emptyResult.getCourseName());
-        assertNotNull(emptyResult.getFormula());
+    @DisplayName("Debe rechazar texto vacío o nulo y PDF ausente sin fabricar datos de sílabo")
+    void shouldRejectEmptyOrNullInputWithoutFabricatingData() {
+        assertThrows(UpstreamServiceException.class, () -> parserEngine.parse(null, "100000TEST"));
+        assertThrows(UpstreamServiceException.class, () -> parserEngine.parse("", "100000TEST"));
+        assertThrows(UpstreamServiceException.class, () -> parserEngine.parsePdf(new byte[0], "100000TEST"));
     }
 
     @Test

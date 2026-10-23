@@ -5,6 +5,7 @@ import com.utp.horario.application.service.pdf.PdfLayoutLine;
 import com.utp.horario.application.service.pdf.PdfSpatialLayoutExtractor;
 import com.utp.horario.application.service.schedule.SyllabusScheduleFsm;
 import com.utp.horario.application.service.table.SyllabusTableReconstructor;
+import com.utp.horario.domain.exception.UpstreamServiceException;
 import com.utp.horario.domain.model.Syllabus;
 import com.utp.horario.domain.model.SyllabusEvaluation;
 import com.utp.horario.domain.model.SyllabusWeeklySession;
@@ -28,10 +29,16 @@ public class SyllabusParserEngine {
 
     /**
      * Parsea un binario PDF oficial de la UTP aplicando extracción espacial posicional.
+     *
+     * <p>Regla de honestidad de datos: si el binario está vacío o es ilegible no se
+     * devuelve sílabo alguno; se lanza {@link UpstreamServiceException} para que la
+     * respuesta HTTP declare la indisponibilidad en lugar de presentar datos inventados
+     * como si fueran oficiales.</p>
      */
     public Syllabus parsePdf(byte[] pdfBytes, String fallbackCourseCode) {
         if (pdfBytes == null || pdfBytes.length == 0) {
-            return buildEmptySyllabus(fallbackCourseCode);
+            throw new UpstreamServiceException(
+                    "No se recibió el documento PDF del sílabo oficial para '" + fallbackCourseCode + "'.");
         }
 
         try (PDDocument document = Loader.loadPDF(pdfBytes)) {
@@ -42,7 +49,8 @@ public class SyllabusParserEngine {
             return parse(rawText, spatialLines, fallbackCourseCode);
         } catch (IOException e) {
             log.warn("[SyllabusParserEngine] Error cargando PDDocument para '{}': {}", fallbackCourseCode, e.getMessage());
-            return buildEmptySyllabus(fallbackCourseCode);
+            throw new UpstreamServiceException(
+                    "No fue posible leer el documento PDF del sílabo oficial para '" + fallbackCourseCode + "'.", e);
         }
     }
 
@@ -55,10 +63,15 @@ public class SyllabusParserEngine {
 
     /**
      * Parsea texto y líneas espaciales del sílabo oficial de la UTP.
+     *
+     * <p>Regla de honestidad de datos: con texto ausente o en blanco no existe sílabo que
+     * presentar, por lo que se lanza {@link UpstreamServiceException} en lugar de fabricar
+     * un objeto con créditos, modalidad u horas por defecto.</p>
      */
     public Syllabus parse(String rawText, List<PdfLayoutLine> spatialLines, String fallbackCourseCode) {
         if (rawText == null || rawText.isBlank()) {
-            return buildEmptySyllabus(fallbackCourseCode);
+            throw new UpstreamServiceException(
+                    "El Portal no entregó el contenido del documento oficial para '" + fallbackCourseCode + "'.");
         }
 
         String cleanText = rawText.replace("\r\n", "\n");
@@ -192,24 +205,4 @@ public class SyllabusParserEngine {
         }
     }
 
-    private Syllabus buildEmptySyllabus(String courseCode) {
-        String code = (courseCode != null && !courseCode.isBlank()) ? courseCode : "100000";
-        return Syllabus.builder()
-                .id(code)
-                .courseCode(code)
-                .courseName("ASIGNATURA UTP")
-                .semester("2026 - Ciclo 2 Agosto")
-                .credits(3)
-                .modality("Oficial")
-                .weeklyHours(4)
-                .careers(List.of())
-                .learningGoal("Sílabo en espera de sincronización con la plataforma oficial UTP.")
-                .formula("")
-                .evaluations(List.of())
-                .rules(List.of("Nota mínima aprobatoria oficial: 12."))
-                .maxSimilarityPercent(20)
-                .aiPolicy("Reglamento de integridad académica UTP.")
-                .weeklySchedule(List.of())
-                .build();
-    }
 }
