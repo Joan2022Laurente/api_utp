@@ -66,10 +66,10 @@ public class JwtVerificationProperties {
     private Mode mode = Mode.OFF;
 
     /** Emisor esperado en el claim {@code iss} de los tokens del realm. */
-    private String issuer = "https://sso.utp.edu.pe/auth/realms/Xpedition";
+    private String issuer = "https://auth.utp.edu.pe/realms/Xpedition";
 
     /** Endpoint publico del JWKS del realm (clave publica de verificacion). */
-    private String jwksUrl = "https://sso.utp.edu.pe/auth/realms/Xpedition/protocol/openid-connect/certs";
+    private String jwksUrl = "https://auth.utp.edu.pe/realms/Xpedition/protocol/openid-connect/certs";
 
     /** Tiempo de vida de la cache de claves publicas, en segundos. */
     private long jwksCacheTtlSeconds = 21_600L;
@@ -93,6 +93,7 @@ public class JwtVerificationProperties {
     private List<String> skipPaths = new ArrayList<>(List.of(
             "/auth/login",
             "/auth/refresh",
+            "/health",
             "/actuator",
             "/v3/api-docs",
             "/swagger-ui",

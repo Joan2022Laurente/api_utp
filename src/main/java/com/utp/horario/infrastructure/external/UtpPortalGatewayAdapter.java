@@ -107,6 +107,26 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
     @Value("${utp.pao-user-map:}")
     private String paoUserMapProperty;
 
+    @Value("${utp.portal-url:https://api-portal.utpxpedition.com/graphql}")
+    private String portalUrl;
+
+    @Value("${utp.pao-base-url:https://api-pao.utpxpedition.com}")
+    private String paoBaseUrl;
+
+    private String getPortalEndpoint() {
+        return (portalUrl != null && !portalUrl.isBlank()) ? portalUrl : "https://api-portal.utpxpedition.com/graphql";
+    }
+
+    private String getPaoEndpoint(String subpath) {
+        String base = (paoBaseUrl != null && !paoBaseUrl.isBlank()) ? paoBaseUrl : "https://api-pao.utpxpedition.com";
+        if (base.endsWith("/") && subpath.startsWith("/")) {
+            return base + subpath.substring(1);
+        } else if (!base.endsWith("/") && !subpath.startsWith("/")) {
+            return base + "/" + subpath;
+        }
+        return base + subpath;
+    }
+
     /**
      * Namespace UUID v5 de la plataforma UTP+Class, usado para derivar el {@code paoUserId}.
      */
@@ -224,7 +244,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         try {
             String query = "{\"query\":\"{ student { profile { peopleCode studentCode } } }\"}";
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create("https://api-portal.utpxpedition.com/graphql"))
+                    .uri(URI.create(getPortalEndpoint()))
                     .timeout(Duration.ofSeconds(8))
                     .header("accept", "application/json")
                     .header("applicationid", "APP00002")
@@ -277,7 +297,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         }
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create("https://api-pao.utpxpedition.com/communication/student/ad/banners"))
+                    .uri(URI.create(getPaoEndpoint("/communication/student/ad/banners")))
                     .timeout(Duration.ofSeconds(8))
                     .header("accept", "application/json")
                     .header("authorization", "Bearer " + token)
@@ -829,7 +849,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         int cycle = base.getCurrentCycle() != null ? base.getCurrentCycle() : 1;
         String studentCode = base.getStudentCode() != null ? base.getStudentCode().toLowerCase() : "";
 
-        String portalUrl = "https://api-portal.utpxpedition.com/graphql";
+        String portalEndpoint = getPortalEndpoint();
         Map<String, String> commonHeaders = Map.of(
                 "applicationid", "APP00002",
                 "authorization", "Bearer " + accessToken,
@@ -845,7 +865,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                     "\"query\":\"query getProfile { student { academic { campusDesc progDesc } } }\"}";
 
             HttpRequest.Builder profileReqBuilder = HttpRequest.newBuilder()
-                    .uri(URI.create(portalUrl))
+                    .uri(URI.create(portalEndpoint))
                     .timeout(Duration.ofSeconds(10))
                     .POST(HttpRequest.BodyPublishers.ofString(profileQuery));
             commonHeaders.forEach(profileReqBuilder::header);
@@ -871,7 +891,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                     "\"query\":\"query GetCourseSummary($periodId: String!) { getCourseSummary(periodId: $periodId) { summary { campus relativeCycle } } }\"}";
 
             HttpRequest.Builder summaryReqBuilder = HttpRequest.newBuilder()
-                    .uri(URI.create(portalUrl))
+                    .uri(URI.create(portalEndpoint))
                     .timeout(Duration.ofSeconds(10))
                     .POST(HttpRequest.BodyPublishers.ofString(summaryQuery));
             commonHeaders.forEach(summaryReqBuilder::header);
@@ -931,7 +951,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
 
                 if (!userId.isBlank()) {
                     String dateToQuery = LocalDate.now().toString() + " 00:00:00";
-                    String url = "https://api-pao.utpxpedition.com/course/student/calendar?userId="
+                    String url = getPaoEndpoint("/course/student/calendar?userId=")
                             + URLEncoder.encode(userId, StandardCharsets.UTF_8)
                             + "&dateToQuery=" + URLEncoder.encode(dateToQuery, StandardCharsets.UTF_8)
                             + "&intervalMode=period";
@@ -958,7 +978,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                             return parsePaoCalendarResponse(intervalNode, extractStudentCodeFromToken(token));
                         }
                     } else {
-                        log.warn("[UTP PAO Calendar] Status no exitoso ({}) desde api-pao.utpxpedition.com", response.statusCode());
+                        log.warn("[UTP PAO Calendar] Status no exitoso ({}) desde PAO gateway", response.statusCode());
                     }
                 }
             } catch (Exception e) {
@@ -1037,7 +1057,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 );
 
                 HttpRequest req = HttpRequest.newBuilder()
-                        .uri(URI.create("https://api-portal.utpxpedition.com/graphql"))
+                        .uri(URI.create(getPortalEndpoint()))
                         .timeout(Duration.ofSeconds(10))
                         .header("accept", "*/*")
                         .header("applicationid", "APP00002")
@@ -1212,7 +1232,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
             );
 
             HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create("https://api-portal.utpxpedition.com/graphql"))
+                    .uri(URI.create(getPortalEndpoint()))
                     .timeout(Duration.ofSeconds(10))
                     .header("accept", "*/*")
                     .header("applicationid", "APP00002")
@@ -1327,7 +1347,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
 
             // 1. Sincronizar secciones desde calendario PAO
             String dateToQuery = LocalDate.now().toString() + " 00:00:00";
-            String url = "https://api-pao.utpxpedition.com/course/student/calendar?userId="
+            String url = getPaoEndpoint("/course/student/calendar?userId=")
                     + URLEncoder.encode(userId, StandardCharsets.UTF_8)
                     + "&dateToQuery=" + URLEncoder.encode(dateToQuery, StandardCharsets.UTF_8)
                     + "&intervalMode=period";
@@ -1600,13 +1620,13 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 } else {
                     String syllabusApiUrl = null;
                     if (ref != null && !ref.courseUuid.isBlank() && !ref.sectionUuid.isBlank()) {
-                        syllabusApiUrl = "https://api-pao.utpxpedition.com/course/student/courses/" 
-                                + ref.courseUuid + "/sections/" + ref.sectionUuid + "/syllabus";
+                        syllabusApiUrl = getPaoEndpoint("/course/student/courses/" 
+                                + ref.courseUuid + "/sections/" + ref.sectionUuid + "/syllabus");
                     } else {
                         String targetSec = (ref != null && !ref.numericSection.isBlank()) ? ref.numericSection : pdfUrl;
                         if (targetSec.matches("^\\d+$")) {
-                            syllabusApiUrl = "https://api-pao.utpxpedition.com/course/student/sections/" 
-                                    + URLEncoder.encode(targetSec, StandardCharsets.UTF_8) + "/syllabus";
+                            syllabusApiUrl = getPaoEndpoint("/course/student/sections/" 
+                                    + URLEncoder.encode(targetSec, StandardCharsets.UTF_8) + "/syllabus");
                         }
                     }
 
@@ -1714,7 +1734,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         String userId = extractUserIdFromToken(effectiveToken);
         if (userId == null || userId.isBlank()) return;
 
-        String url = "https://api-pao.utpxpedition.com/learning/student/" + userId + "/dashboard-courses";
+        String url = getPaoEndpoint("/learning/student/" + userId + "/dashboard-courses");
         String tenantId = extractTenantIdFromToken(effectiveToken);
 
         try {
@@ -1785,7 +1805,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         String userId = extractUserIdFromToken(effectiveToken);
         String tenantId = extractTenantIdFromToken(effectiveToken);
 
-        String url = "https://api-pao.utpxpedition.com/course/student/sections/" + sectionId + "/homeworks/" + activityId + "/resume";
+        String url = getPaoEndpoint("/course/student/sections/" + sectionId + "/homeworks/" + activityId + "/resume");
         log.info("[UtpPortalGatewayAdapter] Consultando especificación de tarea en: {}", url);
 
         String resolvedCourseCode = resolveCourseCode(sectionId, null, effectiveToken);
@@ -1927,7 +1947,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         String effectiveDate = (dateToQuery != null && !dateToQuery.isBlank()) ? dateToQuery : "2026-09-21+00:00:00";
         String effectiveMode = (intervalMode != null && !intervalMode.isBlank()) ? intervalMode : "period";
 
-        String url = "https://api-pao.utpxpedition.com/course/student/calendar/activities?userId=" + userId
+        String url = getPaoEndpoint("/course/student/calendar/activities?userId=" + userId)
                 + "&dateToQuery=" + effectiveDate + "&intervalMode=" + effectiveMode;
 
         log.info("[UtpPortalGatewayAdapter] Consultando calendario de actividades en: {}", url);
@@ -2055,7 +2075,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         }
         String effectivePeriod = (periodId != null && !periodId.isBlank()) ? periodId : "2263";
 
-        String url = "https://api-portal.utpxpedition.com/graphql";
+        String url = getPortalEndpoint();
         log.info("[UtpPortalGatewayAdapter] Consultando GetCourseSummary en Portal GraphQL para periodo: {}", effectivePeriod);
 
         Map<String, Object> bodyObj = new HashMap<>();
