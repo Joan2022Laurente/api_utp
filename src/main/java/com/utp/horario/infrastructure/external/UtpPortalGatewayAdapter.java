@@ -93,6 +93,15 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
     }
 
     /**
+     * Constructor para pruebas: permite inyectar un {@link HttpClient} simulado sin
+     * levantar el contexto de Spring ni salir a la red.
+     */
+    UtpPortalGatewayAdapter(HttpClient httpClient) {
+        this.httpClient = httpClient;
+        this.objectMapper = new ObjectMapper();
+    }
+
+    /**
      * Correspondencia PAO inyectada por Spring ({@code utp.pao-user-map}).
      * Fallback por variable de entorno: {@code UTP_PAO_USER_MAP}.
      */
@@ -899,72 +908,87 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         if (token == null || token.isBlank()) {
             throw new AuthenticationException("Se requiere token de sesión institucional UTP.");
         }
-
-        if (token.contains(".")) {
-            // 1. Intentar extracción 100% real de aulas, pabellones y docentes via Portal GraphQL
-            try {
-                ScheduleInterval graphqlInterval = fetchScheduleFromPortalGraphQL(token, period);
-                if (graphqlInterval != null && !graphqlInterval.getClasses().isEmpty()) {
-                    log.info("[UTP Portal GraphQL] Horario extraído exitosamente con {} clases reales", graphqlInterval.getClasses().size());
-                    return graphqlInterval;
-                }
-            } catch (Exception e) {
-                log.warn("[UTP Portal GraphQL] Error consultando GraphQL portal: {}. Intentando fallback PAO...", e.getMessage());
-            }
-
-            // 2. Fallback a PAO Calendar si GraphQL falla
-            try {
-                String userId = extractUserIdFromToken(token);
-                String tenantId = extractTenantIdFromToken(token);
-
-                if (!userId.isBlank()) {
-                    String dateToQuery = LocalDate.now().toString() + " 00:00:00";
-                    String url = getPaoEndpoint("/course/student/calendar?userId=")
-                            + URLEncoder.encode(userId, StandardCharsets.UTF_8)
-                            + "&dateToQuery=" + URLEncoder.encode(dateToQuery, StandardCharsets.UTF_8)
-                            + "&intervalMode=period";
-
-                    HttpRequest request = HttpRequest.newBuilder()
-                            .uri(URI.create(url))
-                            .timeout(Duration.ofSeconds(15))
-                            .header("Authorization", "Bearer " + token)
-                            .header("x-tenant-id", tenantId)
-                            .header("user-id", userId)
-                            .header("user-role", "STUDENT")
-                            .header("origin", "https://class.utp.edu.pe")
-                            .header("referer", "https://class.utp.edu.pe/")
-                            .header("Accept", "application/json, text/plain, */*")
-                            .GET()
-                            .build();
-
-                    HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
-                    if (response.statusCode() == 200) {
-                        JsonNode root = objectMapper.readTree(response.body());
-                        JsonNode intervalNode = root.path("data").path("current_interval");
-                        if (intervalNode != null && intervalNode.hasNonNull("events")) {
-                            return parsePaoCalendarResponse(intervalNode, extractStudentCodeFromToken(token));
-                        }
-                    } else if (response.statusCode() == 401 || response.statusCode() == 403) {
-                        log.warn("[UTP PAO Calendar] Sesión rechazada por PAO gateway (HTTP {})", response.statusCode());
-                        throw new AuthenticationException("Sesión institucional UTP expirada o no autorizada en PAO (HTTP " + response.statusCode() + ").");
-                    } else if (response.statusCode() >= 500) {
-                        log.error("[UTP PAO Calendar] Error interno de PAO gateway (HTTP {})", response.statusCode());
-                        throw new UpstreamServiceException("El portal institucional UTP (PAO) no está disponible (HTTP " + response.statusCode() + ").");
-                    } else {
-                        log.warn("[UTP PAO Calendar] Status no exitoso ({}) desde PAO gateway", response.statusCode());
-                        throw new UpstreamServiceException("Respuesta inesperada de UTP PAO (HTTP " + response.statusCode() + ").");
-                    }
-                }
-            } catch (AuthenticationException | UpstreamServiceException e) {
-                throw e;
-            } catch (Exception e) {
-                log.warn("[UTP PAO Calendar] Excepción al consultar horario en vivo UTP: {}", e.getMessage());
-                throw new UpstreamServiceException("Error de conexión al consultar horario en UTP: " + e.getMessage(), e);
-            }
+        if (!token.contains(".")) {
+            throw new AuthenticationException("El token de sesión UTP no tiene formato JWT.");
         }
 
-        // Si el token es válido pero no hay eventos programados (ej. periodo de receso)
+        // 1. Intentar extracción 100% real de aulas, pabellones y docentes via Portal GraphQL
+        RuntimeException graphqlFailure = null;
+        try {
+            ScheduleInterval graphqlInterval = fetchScheduleFromPortalGraphQL(token, period);
+            if (graphqlInterval != null && !graphqlInterval.getClasses().isEmpty()) {
+                log.info("[UTP Portal GraphQL] Horario extraído exitosamente con {} clases reales", graphqlInterval.getClasses().size());
+                return graphqlInterval;
+            }
+        } catch (AuthenticationException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            graphqlFailure = e;
+            log.warn("[UTP Portal GraphQL] Error consultando GraphQL portal: {}. Intentando fallback PAO...", e.getMessage());
+        }
+
+        // 2. Fallback a PAO Calendar si GraphQL falla o no aporta clases
+        String userId = extractUserIdFromToken(token);
+        if (userId == null || userId.isBlank()) {
+            throw new AuthenticationException("El token de sesión UTP no contiene un identificador de usuario (sub).");
+        }
+
+        try {
+            String tenantId = extractTenantIdFromToken(token);
+            String dateToQuery = LocalDate.now().toString() + " 00:00:00";
+            String url = getPaoEndpoint("/course/student/calendar?userId=")
+                    + URLEncoder.encode(userId, StandardCharsets.UTF_8)
+                    + "&dateToQuery=" + URLEncoder.encode(dateToQuery, StandardCharsets.UTF_8)
+                    + "&intervalMode=period";
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(15))
+                    .header("Authorization", "Bearer " + token)
+                    .header("x-tenant-id", tenantId)
+                    .header("user-id", userId)
+                    .header("user-role", "STUDENT")
+                    .header("origin", "https://class.utp.edu.pe")
+                    .header("referer", "https://class.utp.edu.pe/")
+                    .header("Accept", "application/json, text/plain, */*")
+                    .GET()
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() == 200) {
+                JsonNode root = objectMapper.readTree(response.body());
+                if (root.has("errors")) {
+                    throw new UpstreamServiceException("UTP PAO devolvió errores al consultar el horario.");
+                }
+                JsonNode intervalNode = root.path("data").path("current_interval");
+                if (intervalNode != null && intervalNode.hasNonNull("events")) {
+                    return parsePaoCalendarResponse(intervalNode, extractStudentCodeFromToken(token));
+                }
+                // 200 sin eventos: el periodo no tiene clases programadas; es un vacío legítimo.
+                return emptyScheduleInterval(period);
+            } else if (response.statusCode() == 401 || response.statusCode() == 403) {
+                log.warn("[UTP PAO Calendar] Sesión rechazada por PAO gateway (HTTP {})", response.statusCode());
+                throw new AuthenticationException("Sesión institucional UTP expirada o no autorizada en PAO (HTTP " + response.statusCode() + ").");
+            } else if (response.statusCode() == 404) {
+                throw new ResourceNotFoundException("El portal UTP no encontró el calendario del estudiante para el periodo solicitado.");
+            } else if (response.statusCode() >= 500) {
+                log.error("[UTP PAO Calendar] Error interno de PAO gateway (HTTP {})", response.statusCode());
+                throw new UpstreamServiceException("El portal institucional UTP (PAO) no está disponible (HTTP " + response.statusCode() + ").");
+            } else {
+                log.warn("[UTP PAO Calendar] Status no exitoso ({}) desde PAO gateway", response.statusCode());
+                throw new UpstreamServiceException("Respuesta inesperada de UTP PAO (HTTP " + response.statusCode() + ").");
+            }
+        } catch (AuthenticationException | ResourceNotFoundException | UpstreamServiceException e) {
+            throw e;
+        } catch (Exception e) {
+            String graphqlDetail = graphqlFailure != null ? " (GraphQL: " + graphqlFailure.getMessage() + ")" : "";
+            log.warn("[UTP PAO Calendar] Excepción al consultar horario en vivo UTP: {}", e.getMessage());
+            throw new UpstreamServiceException("Error de conexión al consultar horario en UTP" + graphqlDetail + ": " + e.getMessage(), e);
+        }
+    }
+
+    private ScheduleInterval emptyScheduleInterval(String period) {
         return ScheduleInterval.builder()
                 .id("interval-empty")
                 .periodName(period != null ? period : "2026 - Ciclo 2 Agosto")
@@ -994,6 +1018,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
 
         List<ClassSession> allClasses = new ArrayList<>();
         Map<String, Course> coursesMap = new HashMap<>();
+        RuntimeException lastFailure = null;
 
         String scheduleGraphqlQuery = "query getSchedules($date: Float!, $periods: [String!]) {\n" +
                 "  scheduleByDate(filters: {date: $date, classTypes: [1, 2, 3, 4, 5, 6], periods: $periods}) {\n" +
@@ -1052,6 +1077,11 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 if (resp.statusCode() == 200) {
                     JsonNode root = objectMapper.readTree(resp.body());
                     JsonNode datesNode = root.path("data").path("scheduleByDate").path("dates");
+                    if (root.has("errors") && (!datesNode.isArray() || datesNode.isEmpty())) {
+                        lastFailure = new UpstreamServiceException(
+                                "UTP Portal GraphQL devolvió errores al consultar la semana " + (w + 1) + ".");
+                        continue;
+                    }
                     if (datesNode.isArray()) {
                         for (JsonNode dNode : datesNode) {
                             JsonNode itemsNode = dNode.path("items");
@@ -1175,13 +1205,30 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                             }
                         }
                     }
+                } else if (resp.statusCode() == 401 || resp.statusCode() == 403) {
+                    throw new AuthenticationException(
+                            "Sesión institucional UTP expirada o no autorizada en Portal GraphQL (HTTP " + resp.statusCode() + ").");
+                } else if (resp.statusCode() >= 500) {
+                    lastFailure = new UpstreamServiceException(
+                            "El Portal UTP no está disponible (HTTP " + resp.statusCode() + ") al consultar la semana " + (w + 1) + ".");
+                } else {
+                    lastFailure = new UpstreamServiceException(
+                            "Respuesta inesperada del Portal UTP (HTTP " + resp.statusCode() + ") al consultar la semana " + (w + 1) + ".");
                 }
+            } catch (AuthenticationException e) {
+                throw e;
             } catch (Exception e) {
+                lastFailure = new UpstreamServiceException(
+                        "Error de conexión al consultar la semana " + (w + 1) + " en el Portal UTP: " + e.getMessage(), e);
                 log.warn("[UTP Portal GraphQL] Falló consulta de semana {}: {}", w + 1, e.getMessage());
             }
         }
 
         if (allClasses.isEmpty()) {
+            if (lastFailure != null) {
+                throw new UpstreamServiceException(
+                        "No se pudo consultar el horario en el Portal UTP: " + lastFailure.getMessage(), lastFailure);
+            }
             return null;
         }
 
@@ -1579,7 +1626,8 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 // (y jamás con el token de otro estudiante).
                 if (effectiveToken.isBlank()) {
                     log.warn("[UtpPortalGatewayAdapter] Sílabo '{}' no resoluble: la petición no incluye credenciales propias", courseCodeOrUrl);
-                    return "";
+                    throw new AuthenticationException(
+                            "Se requiere token de sesión institucional UTP para resolver el sílabo solicitado.");
                 }
 
                 String userId = extractUserIdFromToken(effectiveToken);
@@ -1631,18 +1679,28 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                         if (res.statusCode() == 200) {
                             rememberResolvedPaoUserId(effectiveToken, userId);
                             JsonNode node = objectMapper.readTree(res.body());
-                            if (node.has("data") && node.path("data").hasNonNull("syllabusUrl")) {
+                            if (node.has("errors")) {
+                                throw new UpstreamServiceException("PAO devolvió errores al resolver el sílabo de " + courseCodeOrUrl + ".");
+                            }
+                            if (node.path("data").hasNonNull("syllabusUrl")) {
                                 pdfUrl = node.path("data").path("syllabusUrl").asText();
                                 log.info("[UtpPortalGatewayAdapter] URL de sílabo obtenida desde PAO API: {}", pdfUrl);
+                            } else {
+                                throw new ResourceNotFoundException(
+                                        "PAO no publicó una URL de sílabo para el curso solicitado: " + courseCodeOrUrl);
                             }
+                        } else if (res.statusCode() == 401 || res.statusCode() == 403) {
+                            invalidatePaoUserId(extractStudentCodeFromToken(effectiveToken), userId);
+                            log.warn("[UtpPortalGatewayAdapter] Descarga de sílabo rechazada por PAO (HTTP {})", res.statusCode());
+                            throw new AuthenticationException(
+                                    "Sesión institucional UTP expirada o no autorizada para resolver el sílabo (HTTP " + res.statusCode() + ").");
+                        } else if (res.statusCode() == 404) {
+                            throw new ResourceNotFoundException(
+                                    "PAO no encontró el sílabo solicitado: " + courseCodeOrUrl);
                         } else {
-                            log.warn("[UtpPortalGatewayAdapter] Respuesta no exitosa ({}) de PAO syllabus para {}: {}. "
-                                            + "Si el codigo es 403, configure la correspondencia PAO del alumno en 'utp.pao-user-map' "
-                                            + "(o UTP_PAO_USER_MAP): el 'user-id' debe ser el paoUserId, no el 'sub' del JWT SSO.",
-                                    res.statusCode(), syllabusApiUrl, res.body());
-                            if (res.statusCode() == 401 || res.statusCode() == 403) {
-                                invalidatePaoUserId(extractStudentCodeFromToken(effectiveToken), userId);
-                            }
+                            log.warn("[UtpPortalGatewayAdapter] Respuesta no exitosa ({}) de PAO syllabus para {}", res.statusCode(), syllabusApiUrl);
+                            throw new UpstreamServiceException(
+                                    "PAO respondió con error HTTP " + res.statusCode() + " al resolver el sílabo.");
                         }
                     }
                 }
@@ -1682,7 +1740,8 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
             throw new UpstreamServiceException("Error al procesar PDF de sílabo: " + e.getMessage(), e);
         }
 
-        return "";
+        throw new ResourceNotFoundException(
+                "No se pudo resolver la URL del sílabo para: " + courseCodeOrUrl);
     }
 
     private final Map<String, String> sectionToCourseCodeCache = new ConcurrentHashMap<>();
@@ -1789,6 +1848,9 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
     @Override
     public TaskSpecification fetchTaskSpecification(String sectionId, String activityId, String token) {
         String effectiveToken = (token != null && token.startsWith("Bearer ")) ? token.substring(7).trim() : token;
+        if (effectiveToken == null || effectiveToken.isBlank()) {
+            throw new AuthenticationException("Se requiere token de sesión institucional UTP para consultar la tarea.");
+        }
         String userId = extractUserIdFromToken(effectiveToken);
         String tenantId = extractTenantIdFromToken(effectiveToken);
 
@@ -1816,7 +1878,17 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
             HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
             if (resp.statusCode() == 200) {
                 JsonNode root = objectMapper.readTree(resp.body());
+                if (root.has("errors")) {
+                    throw new UpstreamServiceException("UTP PAO devolvió errores al consultar la especificación de la tarea " + activityId + ".");
+                }
                 JsonNode data = root.path("data");
+                if (data.isMissingNode() || data.isNull() || !data.isObject()) {
+                    throw new UpstreamServiceException("UTP PAO no devolvió datos para la tarea " + activityId + ".");
+                }
+                String title = data.path("title").asText("").trim();
+                if (title.isBlank()) {
+                    throw new UpstreamServiceException("UTP PAO devolvió una tarea sin título para " + activityId + ".");
+                }
 
                 String rawContent = data.path("content").asText("");
                 String rawDeliverables = data.path("deliverables").asText("");
@@ -1887,7 +1959,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
 
                 return TaskSpecification.builder()
                         .id(data.path("id").asText(activityId))
-                        .title(data.path("title").asText("Asignación"))
+                        .title(title)
                         .courseCode(resolvedCourseCode)
                         .sectionId(sectionId)
                         .descriptionMarkdown(markdownDesc)
@@ -1927,6 +1999,9 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
     @Override
     public List<AcademicActivity> fetchCalendarActivities(String dateToQuery, String intervalMode, String token) {
         String effectiveToken = (token != null && token.startsWith("Bearer ")) ? token.substring(7).trim() : token;
+        if (effectiveToken == null || effectiveToken.isBlank()) {
+            throw new AuthenticationException("Se requiere token de sesión institucional UTP para consultar el calendario.");
+        }
         String userId = extractUserIdFromToken(effectiveToken);
         String tenantId = extractTenantIdFromToken(effectiveToken);
 
@@ -1959,6 +2034,9 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
             if (resp.statusCode() == 200) {
                 rememberResolvedPaoUserId(effectiveToken, userId);
                 JsonNode root = objectMapper.readTree(resp.body());
+                if (root.has("errors")) {
+                    throw new UpstreamServiceException("UTP PAO devolvió errores al consultar el calendario de actividades.");
+                }
                 JsonNode eventsNode = root.path("data").path("current_interval").path("events");
                 if (eventsNode.isArray()) {
                     for (JsonNode ev : eventsNode) {
@@ -1997,11 +2075,15 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                                 .daysRemaining(urgencyInfo.daysRemaining())
                                 .build());
                     }
+                } else {
+                    throw new UpstreamServiceException("UTP PAO no devolvió un arreglo de eventos para el calendario de actividades.");
                 }
             } else if (resp.statusCode() == 401 || resp.statusCode() == 403) {
                 invalidatePaoUserId(extractStudentCodeFromToken(effectiveToken), userId);
                 log.warn("[UtpPortalGatewayAdapter] Error {} consultando calendar activities: sesión no autorizada o expirada", resp.statusCode());
                 throw new AuthenticationException("Sesión institucional UTP expirada o no autorizada en PAO (HTTP " + resp.statusCode() + ").");
+            } else if (resp.statusCode() == 404) {
+                throw new ResourceNotFoundException("No se encontró el calendario de actividades del estudiante en PAO.");
             } else if (resp.statusCode() >= 500) {
                 log.error("[UtpPortalGatewayAdapter] Error {} consultando calendar activities en PAO", resp.statusCode());
                 throw new UpstreamServiceException("El servicio de calendario PAO de UTP respondió con error HTTP " + resp.statusCode() + ".");
@@ -2009,7 +2091,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 log.warn("[UtpPortalGatewayAdapter] Error {} consultando calendar activities", resp.statusCode());
                 throw new UpstreamServiceException("Error HTTP " + resp.statusCode() + " al consultar calendario de actividades UTP.");
             }
-        } catch (AuthenticationException | UpstreamServiceException e) {
+        } catch (AuthenticationException | ResourceNotFoundException | UpstreamServiceException e) {
             throw e;
         } catch (Exception e) {
             log.error("[UtpPortalGatewayAdapter] Excepción en fetchCalendarActivities: {}", e.getMessage());
@@ -2060,6 +2142,9 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
     @Override
     public CourseSummaryData fetchCourseSummary(String periodId, String token) {
         String effectiveToken = (token != null && token.startsWith("Bearer ")) ? token.substring(7).trim() : token;
+        if (effectiveToken == null || effectiveToken.isBlank()) {
+            throw new AuthenticationException("Se requiere token de sesión institucional UTP para consultar el resumen de cursos.");
+        }
         String studentCode = extractStudentCodeFromToken(effectiveToken);
         if (studentCode == null || studentCode.isBlank()) {
             throw new AuthenticationException("Token de autenticación no contiene código de estudiante válido");
@@ -2125,23 +2210,33 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
             HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
             if (resp.statusCode() == 200) {
                 JsonNode root = objectMapper.readTree(resp.body());
-                JsonNode summaryNode = root.path("data").path("getCourseSummary").path("summary");
-                if (!summaryNode.isMissingNode() && !summaryNode.isNull()) {
-                    periodSummary = CourseSummaryData.PeriodSummary.builder()
-                            .campus(summaryNode.path("campus").asText(null))
-                            .enrolledCourses(summaryNode.path("enrolledCourses").asText(null))
-                            .average(summaryNode.path("average").asText(null))
-                            .relativeCycle(summaryNode.path("relativeCycle").asText(null))
-                            .creditCount(summaryNode.path("creditCount").asText(null))
-                            .meritOrder(summaryNode.path("meritOrder").asText(null))
-                            .weeklyHours(summaryNode.path("weeklyHours").asText(null))
-                            .meritBelong(summaryNode.path("meritBelong").asText(null))
-                            .build();
+                if (root.has("errors")) {
+                    throw new UpstreamServiceException("El Portal UTP devolvió errores al consultar el resumen de cursos.");
                 }
+                JsonNode summaryRoot = root.path("data").path("getCourseSummary");
+                if (summaryRoot.isMissingNode() || summaryRoot.isNull() || !summaryRoot.isObject()) {
+                    throw new UpstreamServiceException("El Portal UTP no devolvió datos de resumen de cursos.");
+                }
+                JsonNode summaryNode = summaryRoot.path("summary");
+                if (summaryNode.isMissingNode() || summaryNode.isNull() || !summaryNode.isObject()) {
+                    throw new UpstreamServiceException("El Portal UTP no devolvió el resumen del periodo.");
+                }
+                periodSummary = CourseSummaryData.PeriodSummary.builder()
+                        .campus(summaryNode.path("campus").asText(null))
+                        .enrolledCourses(summaryNode.path("enrolledCourses").asText(null))
+                        .average(summaryNode.path("average").asText(null))
+                        .relativeCycle(summaryNode.path("relativeCycle").asText(null))
+                        .creditCount(summaryNode.path("creditCount").asText(null))
+                        .meritOrder(summaryNode.path("meritOrder").asText(null))
+                        .weeklyHours(summaryNode.path("weeklyHours").asText(null))
+                        .meritBelong(summaryNode.path("meritBelong").asText(null))
+                        .build();
 
-                JsonNode coursesNode = root.path("data").path("getCourseSummary").path("courses");
-                if (coursesNode.isArray()) {
-                    for (JsonNode cNode : coursesNode) {
+                JsonNode coursesNode = summaryRoot.path("courses");
+                if (!coursesNode.isArray()) {
+                    throw new UpstreamServiceException("El Portal UTP no devolvió el arreglo de cursos del periodo.");
+                }
+                for (JsonNode cNode : coursesNode) {
                         List<CourseSummaryData.EvaluationGrade> evGrades = new ArrayList<>();
                         if (cNode.has("evaluations") && cNode.path("evaluations").isArray()) {
                             for (JsonNode ev : cNode.path("evaluations")) {
@@ -2171,11 +2266,12 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                                 .average(cNode.path("average").asText(""))
                                 .evaluations(evGrades)
                                 .build());
-                    }
                 }
             } else if (resp.statusCode() == 401 || resp.statusCode() == 403) {
                 log.warn("[UtpPortalGatewayAdapter] Error {} en GetCourseSummary: sesión expirada o no autorizada", resp.statusCode());
                 throw new AuthenticationException("Sesión institucional UTP expirada o no autorizada en Portal UTP (HTTP " + resp.statusCode() + ").");
+            } else if (resp.statusCode() == 404) {
+                throw new ResourceNotFoundException("No se encontró el resumen de cursos del estudiante en el Portal UTP.");
             } else if (resp.statusCode() >= 500) {
                 log.error("[UtpPortalGatewayAdapter] Error {} en GetCourseSummary: fallo upstream", resp.statusCode());
                 throw new UpstreamServiceException("El portal institucional UTP no está disponible (HTTP " + resp.statusCode() + ").");
@@ -2183,7 +2279,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 log.warn("[UtpPortalGatewayAdapter] Error {} en GetCourseSummary", resp.statusCode());
                 throw new UpstreamServiceException("Error HTTP " + resp.statusCode() + " al consultar resumen de cursos UTP.");
             }
-        } catch (AuthenticationException | UpstreamServiceException e) {
+        } catch (AuthenticationException | ResourceNotFoundException | UpstreamServiceException e) {
             throw e;
         } catch (Exception e) {
             log.error("[UtpPortalGatewayAdapter] Excepción en fetchCourseSummary: {}", e.getMessage());

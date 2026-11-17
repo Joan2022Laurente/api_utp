@@ -148,9 +148,14 @@ public class JwtSignatureVerifier implements TokenSignatureVerifierPort {
             return Outcome.invalid("El token no declara identificador de clave (kid)", null, algorithm);
         }
 
+        String unverifiedIssuer = readIssuerUnverified(parts[1]);
+        if (!isValidIssuer(unverifiedIssuer)) {
+            return Outcome.invalid("Emisor no reconocido del token: " + unverifiedIssuer, kid, algorithm);
+        }
+
         PublicKey publicKey;
         try {
-            publicKey = keyProvider.resolve(kid);
+            publicKey = keyProvider.resolveForIssuer(kid, unverifiedIssuer);
         } catch (JwksKeyProvider.JwksUnavailableException e) {
             log.error("[JWT] No se pudo verificar la firma: el JWKS no esta disponible. {}", e.getMessage());
             return Outcome.notVerifiable("El JWKS del SSO no esta disponible: " + e.getMessage(), kid, algorithm);
@@ -192,6 +197,24 @@ public class JwtSignatureVerifier implements TokenSignatureVerifierPort {
         }
         return "https://auth.utp.edu.pe/realms/Xpedition".equalsIgnoreCase(clean)
                 || "https://sso.utp.edu.pe/auth/realms/Xpedition".equalsIgnoreCase(clean);
+    }
+
+    /**
+     * Lee el emisor del payload sin verificar la firma. Solo se usa para elegir el JWKS
+     * correcto; la validacion definitiva del {@code iss} se hace despues de verificar la
+     * firma con {@link #isValidIssuer(String)}.
+     */
+    private String readIssuerUnverified(String payloadSegment) {
+        try {
+            JsonNode payload = objectMapper.readTree(Base64.getUrlDecoder().decode(payloadSegment));
+            if (payload != null && payload.isObject()) {
+                JsonNode issuer = payload.get("iss");
+                return issuer != null && issuer.isValueNode() ? issuer.asText(null) : null;
+            }
+        } catch (Exception e) {
+            log.debug("[JWT] No se pudo leer el emisor del payload no verificado: {}", e.getMessage());
+        }
+        return null;
     }
 
     /**

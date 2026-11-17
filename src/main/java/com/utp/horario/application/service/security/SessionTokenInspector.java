@@ -21,8 +21,8 @@ import java.util.Optional;
  *
  * <p><b>Aislamiento de identidad:</b> esta clase es <b>stateless</b>. No mantiene ningún
  * token en memoria compartida, por lo que es imposible que una petición sin token propio
- * tome prestado el token de otro estudiante. La resolución de sesiones vive en
- * {@code UtpPortalGatewayAdapter}, indexada por código de alumno.</p>
+ * tome prestado el token de otro estudiante. La resolución de sesiones es responsabilidad
+ * exclusiva del adaptador, que tampoco almacena tokens.</p>
  *
  * <p>La validación criptográfica de la firma (RS256 contra el JWKS de Keycloak) queda
  * fuera del alcance stateless de este inspector y se reporta como remediación
@@ -111,8 +111,8 @@ public final class SessionTokenInspector {
         }
 
         String[] parts = token.split("\\.");
-        if (parts.length < 2) {
-            throw new AuthenticationException("Token de autenticación UTP inválido o expirado.");
+        if (parts.length != 3 || parts[0].isBlank() || parts[1].isBlank() || parts[2].isBlank()) {
+            throw new AuthenticationException("Token de autenticación UTP inválido: se esperaba un JWT de tres segmentos.");
         }
 
         JsonNode payload;
@@ -129,7 +129,10 @@ public final class SessionTokenInspector {
         Instant now = Instant.now();
 
         Long exp = readEpochSecond(payload, "exp");
-        if (exp != null && Instant.ofEpochSecond(exp).isBefore(now)) {
+        if (exp == null) {
+            throw new AuthenticationException("El token de sesión no declara expiración (exp) y no puede aceptarse.");
+        }
+        if (Instant.ofEpochSecond(exp).isBefore(now)) {
             throw new AuthenticationException("El token de sesión ha expirado. Renueve la sesión con POST /auth/refresh.");
         }
 

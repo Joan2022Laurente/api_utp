@@ -10,6 +10,7 @@ import java.time.Instant;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -65,6 +66,33 @@ class SessionTokenInspectorTest {
         assertThrows(AuthenticationException.class, () -> SessionTokenInspector.inspect("   "));
         assertThrows(AuthenticationException.class, () -> SessionTokenInspector.inspect("no-es-un-jwt"));
         assertThrows(AuthenticationException.class, () -> SessionTokenInspector.inspect("a.!!!not-base64!!!.c"));
+    }
+
+    @Test
+    @DisplayName("Un JWT de solo dos segmentos o con prefijo Basic se rechaza (no basta con parecer JWT)")
+    void tokenWithoutThreeSegmentsOrBearerPrefixIsRejected() {
+        String valid = TestTokens.validFor("U99999999");
+        String[] parts = valid.split("\\.");
+        String twoSegments = parts[0] + "." + parts[1];
+
+        assertThrows(AuthenticationException.class, () -> SessionTokenInspector.inspect(twoSegments));
+        assertNull(SessionTokenInspector.extractBearerToken("Bearer " + twoSegments));
+        assertNull(SessionTokenInspector.extractBearerToken("Basic dXNlcjpwYXNz"));
+    }
+
+    @Test
+    @DisplayName("Un JWT sin claim exp se rechaza: no se aceptan sesiones sin caducidad")
+    void tokenWithoutExpirationIsRejected() {
+        String header = java.util.Base64.getUrlEncoder().withoutPadding()
+                .encodeToString("{\"alg\":\"RS256\",\"typ\":\"JWT\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        String payload = java.util.Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(("{\"preferred_username\":\"U99999999\",\"iss\":\"https://sso.utp.edu.pe/auth/realms/Xpedition\"}")
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        String token = header + "." + payload + ".firma";
+
+        AuthenticationException ex = assertThrows(AuthenticationException.class,
+                () -> SessionTokenInspector.inspect(token));
+        assertTrue(ex.getMessage().toLowerCase().contains("exp"), ex.getMessage());
     }
 
     @Test

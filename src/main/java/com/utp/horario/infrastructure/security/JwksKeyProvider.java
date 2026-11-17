@@ -52,10 +52,16 @@ public class JwksKeyProvider {
     private final HttpClient httpClient;
 
     private final Object refreshLock = new Object();
+    private final Object altRefreshLock = new Object();
 
     private volatile Map<String, PublicKey> cachedKeys = Map.of();
     private volatile Instant cachedAt = Instant.EPOCH;
     private volatile Instant lastFailureAt = Instant.EPOCH;
+
+    private volatile Map<String, PublicKey> altCachedKeys = Map.of();
+    private volatile Instant altCachedAt = Instant.EPOCH;
+    private volatile Instant altLastFailureAt = Instant.EPOCH;
+    private volatile String altCachedUrl = "";
 
     @org.springframework.beans.factory.annotation.Autowired
     public JwksKeyProvider(JwtVerificationProperties properties) {
@@ -73,6 +79,9 @@ public class JwksKeyProvider {
     /**
      * Resuelve la clave publica de verificacion de un token.
      *
+     * <p>Se mantiene para compatibilidad: busca en el JWKS configurado y, si el
+     * {@code kid} no aparece, intenta el realm institucional alternativo.</p>
+     *
      * @param kid identificador de clave declarado en la cabecera del JWT
      * @return la clave publica, o {@code null} si el JWKS esta disponible pero no publica
      *         esa clave (token firmado con una clave ajena o revocada)
@@ -82,7 +91,44 @@ public class JwksKeyProvider {
         if (kid == null || kid.isBlank()) {
             return null;
         }
+        PublicKey key = resolveFromPrimary(kid);
+        if (key != null) {
+            return key;
+        }
+        return resolveFromAlternativeUtpRealm(kid);
+    }
 
+    /**
+     * Resuelve la clave publica del realm que declara el token. A diferencia de
+     * {@link #resolve(String)}, no mezcla claves de ambos realms: el {@code iss} decide
+     * que JWKS se consulta, de modo que una clave del realm {@code auth} no puede validar
+     * un token que dice venir del realm {@code sso} (ni al reves).
+     *
+     * @param kid    identificador de clave declarado en la cabecera del JWT
+     * @param issuer emisor declarado por el token (todavia no verificado)
+     * @return la clave publica del realm del emisor, o {@code null} si no existe
+     * @throws JwksUnavailableException si el JWKS del realm no pudo descargarse
+     */
+    public PublicKey resolveForIssuer(String kid, String issuer) throws JwksUnavailableException {
+        if (kid == null || kid.isBlank() || issuer == null || issuer.isBlank()) {
+            return null;
+        }
+        if (issuer.equalsIgnoreCase(properties.getIssuer())) {
+            return resolveFromPrimary(kid);
+        }
+        String altUrl = alternativeUrlForIssuer(issuer);
+        if (altUrl == null) {
+            return null;
+        }
+        // Solo se consulta el realm alternativo si la configuracion apunta a un realm
+        // institucional. Con un JWKS personalizado no se inventan endpoints externos.
+        if (!isInstitutionalJwksUrl(properties.getJwksUrl())) {
+            return null;
+        }
+        return resolveFromAlternativeRealm(kid, altUrl);
+    }
+
+    private PublicKey resolveFromPrimary(String kid) throws JwksUnavailableException {
         Map<String, PublicKey> keys = cachedKeys;
         if (isCacheStale()) {
             keys = refresh();
@@ -96,17 +142,27 @@ public class JwksKeyProvider {
         // El kid no esta en la cache: puede tratarse de una rotacion de claves de Keycloak.
         // Se fuerza una recarga y se busca de nuevo una unica vez.
         log.info("[JWKS] La clave '{}' no esta en la cache; recargando el JWKS por rotacion de claves.", kid);
-        Map<String, PublicKey> refreshed = refresh();
-        PublicKey refreshedKey = refreshed.get(kid);
-        if (refreshedKey != null) {
-            return refreshedKey;
-        }
-
-        return resolveFromAlternativeUtpRealm(kid);
+        return refresh().get(kid);
     }
 
-    private static final String AUTH_REALM_CERTS = "https://auth.utp.edu.pe/realms/Xpedition/protocol/openid-connect/certs";
-    private static final String SSO_REALM_CERTS = "https://sso.utp.edu.pe/auth/realms/Xpedition/protocol/openid-connect/certs";
+    private static final String AUTH_ISSUER = "https://auth.utp.edu.pe/realms/Xpedition";
+    private static final String SSO_ISSUER = "https://sso.utp.edu.pe/auth/realms/Xpedition";
+    private static final String AUTH_REALM_CERTS = AUTH_ISSUER + "/protocol/openid-connect/certs";
+    private static final String SSO_REALM_CERTS = SSO_ISSUER + "/protocol/openid-connect/certs";
+
+    private String alternativeUrlForIssuer(String issuer) {
+        if (AUTH_ISSUER.equalsIgnoreCase(issuer)) {
+            return AUTH_REALM_CERTS;
+        }
+        if (SSO_ISSUER.equalsIgnoreCase(issuer)) {
+            return SSO_REALM_CERTS;
+        }
+        return null;
+    }
+
+    private boolean isInstitutionalJwksUrl(String url) {
+        return url != null && (url.contains("auth.utp.edu.pe") || url.contains("sso.utp.edu.pe"));
+    }
 
     private PublicKey resolveFromAlternativeUtpRealm(String kid) {
         String currentUrl = properties.getJwksUrl();
@@ -123,25 +179,53 @@ public class JwksKeyProvider {
             return null;
         }
         try {
-            log.info("[JWKS] Buscando clave '{}' en el realm institucional alternativo: {}", kid, altUrl);
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(altUrl))
-                    .timeout(Duration.ofSeconds(Math.max(1, properties.getJwksTimeoutSeconds())))
-                    .header("Accept", "application/json")
-                    .GET()
-                    .build();
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() == 200) {
-                Map<String, PublicKey> altKeys = parseKeysNode(response.body());
-                if (altKeys.containsKey(kid)) {
-                    log.info("[JWKS] Clave '{}' resuelta exitosamente en el realm alternativo", kid);
-                    return altKeys.get(kid);
+            return resolveFromAlternativeRealm(kid, altUrl);
+        } catch (JwksUnavailableException e) {
+            log.warn("[JWKS] No se pudo consultar el realm alternativo {}: {}", altUrl, e.getMessage());
+            return null;
+        }
+    }
+
+    private PublicKey resolveFromAlternativeRealm(String kid, String altUrl) throws JwksUnavailableException {
+        synchronized (altRefreshLock) {
+            boolean sameUrl = altUrl.equals(altCachedUrl);
+            if (sameUrl && !isAltCacheStale()) {
+                PublicKey cached = altCachedKeys.get(kid);
+                if (cached != null) {
+                    return cached;
                 }
             }
-        } catch (Exception e) {
-            log.warn("[JWKS] No se pudo consultar el realm alternativo {}: {}", altUrl, e.getMessage());
+            if (sameUrl && altCachedKeys.isEmpty()
+                    && altLastFailureAt.plusSeconds(FAILURE_COOLDOWN_SECONDS).isAfter(Instant.now())) {
+                throw new JwksUnavailableException(
+                        "El JWKS alternativo no esta disponible (ultimo intento fallido hace menos de "
+                                + FAILURE_COOLDOWN_SECONDS + " s).");
+            }
+            try {
+                log.info("[JWKS] Buscando clave '{}' en el realm institucional alternativo: {}", kid, altUrl);
+                Map<String, PublicKey> keys = downloadKeys(altUrl);
+                altCachedKeys = keys;
+                altCachedAt = Instant.now();
+                altCachedUrl = altUrl;
+                altLastFailureAt = Instant.EPOCH;
+                return keys.get(kid);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                altLastFailureAt = Instant.now();
+                throw new JwksUnavailableException("La descarga del JWKS alternativo fue interrumpida.", e);
+            } catch (IOException | RuntimeException e) {
+                altLastFailureAt = Instant.now();
+                throw new JwksUnavailableException("No se pudo descargar el JWKS alternativo: " + e.getMessage(), e);
+            }
         }
-        return null;
+    }
+
+    private boolean isAltCacheStale() {
+        long ttl = properties.getJwksCacheTtlSeconds();
+        if (ttl <= 0) {
+            return true;
+        }
+        return altCachedAt.plusSeconds(ttl).isBefore(Instant.now());
     }
 
     /**
@@ -193,8 +277,12 @@ public class JwksKeyProvider {
      * conjunto de claves deterministas.</p>
      */
     protected Map<String, PublicKey> downloadKeys() throws IOException, InterruptedException {
+        return downloadKeys(properties.getJwksUrl());
+    }
+
+    private Map<String, PublicKey> downloadKeys(String url) throws IOException, InterruptedException {
         HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(properties.getJwksUrl()))
+                .uri(URI.create(url))
                 .timeout(Duration.ofSeconds(Math.max(1, properties.getJwksTimeoutSeconds())))
                 .header("Accept", "application/json")
                 .GET()

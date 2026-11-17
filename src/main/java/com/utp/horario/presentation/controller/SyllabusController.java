@@ -1,6 +1,7 @@
 package com.utp.horario.presentation.controller;
 
 import com.utp.horario.application.service.security.SessionTokenInspector;
+import com.utp.horario.domain.exception.AuthenticationException;
 import com.utp.horario.domain.model.Course;
 import com.utp.horario.domain.model.ScheduleInterval;
 import com.utp.horario.domain.model.Syllabus;
@@ -48,7 +49,7 @@ public class SyllabusController {
             @RequestParam(required = false) String pdfUrl,
             @Parameter(description = "Token Bearer SSO de UTP")
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
-        String token = authHeader != null && authHeader.startsWith("Bearer ") ? authHeader.substring(7) : authHeader;
+        String token = optionalBearer(authHeader);
         Syllabus syllabus = syllabusServicePort.getSyllabus(courseCode, sectionId, pdfUrl, token);
         return ResponseEntity.ok(ApiResponse.ok(syllabus));
     }
@@ -154,13 +155,31 @@ public class SyllabusController {
     }
 
 
+    /**
+     * Extrae un Bearer opcional. Si el cliente envía una cabecera, debe ser un JWT Bearer
+     * válido; si no envía ninguna, se permite el acceso anónimo de solo caché.
+     *
+     * @throws AuthenticationException si la cabecera existe pero no es un Bearer JWT válido
+     */
+    private String optionalBearer(String authHeader) {
+        if (authHeader == null || authHeader.isBlank()) {
+            return null;
+        }
+        String token = SessionTokenInspector.extractBearerToken(authHeader);
+        if (token == null) {
+            throw new AuthenticationException(
+                    "Cabecera Authorization inválida: se requiere el formato 'Bearer <token>' con un JWT vigente.");
+        }
+        return token;
+    }
+
     @GetMapping("/raw-text")
     public ResponseEntity<ApiResponse<String>> getRawText(
             @RequestParam String courseCode,
             @RequestParam(required = false) String sectionId,
             @RequestParam(required = false) String pdfUrl,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
-        String token = authHeader != null && authHeader.startsWith("Bearer ") ? authHeader.substring(7) : authHeader;
+        String token = optionalBearer(authHeader);
         String rawText = syllabusServicePort.fetchRawSyllabusText(courseCode, sectionId, pdfUrl, token);
         return ResponseEntity.ok(ApiResponse.ok("Texto de sílabo obtenido", rawText));
     }
@@ -178,7 +197,7 @@ public class SyllabusController {
             @RequestParam(required = false, defaultValue = "false") boolean preferRaw,
             @Parameter(description = "Token Bearer SSO de UTP")
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
-        String token = authHeader != null && authHeader.startsWith("Bearer ") ? authHeader.substring(7) : authHeader;
+        String token = optionalBearer(authHeader);
         String markdown = syllabusServicePort.getSyllabusAsMarkdown(courseCode, sectionId, pdfUrl, token, preferRaw);
         return ResponseEntity.ok()
                 .header(org.springframework.http.HttpHeaders.CONTENT_TYPE, "text/markdown; charset=utf-8")

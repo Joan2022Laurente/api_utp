@@ -1,5 +1,6 @@
 package com.utp.horario.infrastructure.external;
 
+import com.utp.horario.domain.exception.AuthenticationException;
 import com.utp.horario.support.TestTokens;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -8,6 +9,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -34,10 +36,12 @@ class UtpPortalGatewayAdapterTokenIsolationTest {
     }
 
     @Test
-    @DisplayName("Una petición sin token devuelve cadena vacía y nunca toma prestado token ajeno")
+    @DisplayName("Una petición sin token falla con 401 y nunca toma prestado token ajeno")
     void anonymousRequestNeverBorrowsAnotherStudentToken() {
-        String text = adapter.fetchSyllabusPdfText(null, "100000ST61");
-        assertEquals("", text, "Una petición sin token no debe usar el token de ningún otro estudiante");
+        AuthenticationException ex = assertThrows(AuthenticationException.class,
+                () -> adapter.fetchSyllabusPdfText(null, "100000ST61"),
+                "Una petición sin token debe fallar en vez de usar el token de otro estudiante");
+        assertTrue(ex.getMessage().toLowerCase().contains("token"), ex.getMessage());
     }
 
     @Test
@@ -60,10 +64,9 @@ class UtpPortalGatewayAdapterTokenIsolationTest {
         // Con un código numérico, el adaptador intentaría resolver la sección vía PAO.
         // Sin credenciales propias debe abortar sin salir a la red.
         long start = System.currentTimeMillis();
-        String text = adapter.fetchSyllabusPdfText(null, "45104");
+        assertThrows(AuthenticationException.class, () -> adapter.fetchSyllabusPdfText(null, "45104"));
         long elapsed = System.currentTimeMillis() - start;
 
-        assertEquals("", text);
         assertTrue(elapsed < 2000,
                 "Sin token propio no debe ejecutarse ninguna llamada autenticada al portal PAO (tardó " + elapsed + " ms)");
     }

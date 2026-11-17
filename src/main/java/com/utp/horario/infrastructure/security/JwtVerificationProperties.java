@@ -18,12 +18,12 @@ import java.util.List;
  * progresiva y reversible sin recompilar:</p>
  *
  * <ul>
- *   <li>{@link Mode#OFF} — no se verifica nada (comportamiento heredado).</li>
+ *   <li>{@link Mode#ENFORCE} — modo por defecto: un token con firma inválida se responde
+ *       con {@code 401 Unauthorized} dentro del sobre {@code ApiResponse}.</li>
  *   <li>{@link Mode#AUDIT} — se verifica y se registra el resultado, pero nunca se rechaza
  *       la peticion. Permite observar en produccion que el 100% de los tokens reales
  *       pasan la validacion antes de activar el rechazo.</li>
- *   <li>{@link Mode#ENFORCE} — un token con firma invalida se responde con
- *       {@code 401 Unauthorized} dentro del sobre {@code ApiResponse}.</li>
+ *   <li>{@link Mode#OFF} — no se verifica nada; solo debe usarse en desarrollo local.</li>
  * </ul>
  *
  * <p>El modo se controla con la variable de entorno {@code UTP_JWT_MODE}, de forma que
@@ -63,7 +63,7 @@ public class JwtVerificationProperties {
     }
 
     /** Modo de operacion. */
-    private Mode mode = Mode.OFF;
+    private Mode mode = Mode.ENFORCE;
 
     /** Emisor esperado en el claim {@code iss} de los tokens del realm. */
     private String issuer = "https://auth.utp.edu.pe/realms/Xpedition";
@@ -78,10 +78,11 @@ public class JwtVerificationProperties {
     private long jwksTimeoutSeconds = 3L;
 
     /**
-     * Si el JWKS no puede descargarse (caida de red), la peticion NO se rechaza: se registra
-     * el incidente y se sigue adelante. Prioriza la disponibilidad ante una caida del SSO.
+     * Si el JWKS no puede descargarse (caida de red), la peticion se rechaza por defecto.
+     * Un token no verificable no debe tratarse como valido; el operador puede habilitar
+     * fail-open temporalmente si prioriza la disponibilidad sobre la seguridad.
      */
-    private boolean failOpen = true;
+    private boolean failOpen = false;
 
     /** Desfase de reloj tolerado al evaluar {@code exp}/{@code nbf}, en segundos. */
     private long clockSkewSeconds = 60L;
