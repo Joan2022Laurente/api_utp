@@ -58,8 +58,8 @@ utp:
   security:
     jwt:
       mode: ${UTP_JWT_MODE:off}
-      issuer: ${UTP_JWT_ISSUER:https://sso.utp.edu.pe/auth/realms/Xpedition}
-      jwks-url: ${UTP_JWT_JWKS_URL:https://sso.utp.edu.pe/auth/realms/Xpedition/protocol/openid-connect/certs}
+      issuer: ${UTP_JWT_ISSUER:https://auth.utp.edu.pe/realms/Xpedition}
+      jwks-url: ${UTP_JWT_JWKS_URL:https://auth.utp.edu.pe/realms/Xpedition/protocol/openid-connect/certs}
       jwks-cache-ttl-seconds: ${UTP_JWT_JWKS_TTL:21600}
       jwks-timeout-seconds: ${UTP_JWT_JWKS_TIMEOUT:3}
       clock-skew-seconds: ${UTP_JWT_CLOCK_SKEW:60}
