@@ -630,51 +630,54 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
             cleanUsername = "u" + cleanUsername;
         }
 
-        try {
-            String formParams = "client_id=" + URLEncoder.encode("pao-web", StandardCharsets.UTF_8)
-                    + "&grant_type=" + URLEncoder.encode("password", StandardCharsets.UTF_8)
-                    + "&username=" + URLEncoder.encode(cleanUsername, StandardCharsets.UTF_8)
-                    + "&password=" + URLEncoder.encode(password.trim(), StandardCharsets.UTF_8)
-                    + "&scope=" + URLEncoder.encode("openid roles-client-pao-web profile email roles-realm-xpedition", StandardCharsets.UTF_8);
+        List<String> tokenEndpoints = List.of(
+                "https://auth.utp.edu.pe/realms/Xpedition/protocol/openid-connect/token",
+                "https://sso.utp.edu.pe/auth/realms/Xpedition/protocol/openid-connect/token"
+        );
 
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create("https://sso.utp.edu.pe/auth/realms/Xpedition/protocol/openid-connect/token"))
-                    .timeout(Duration.ofSeconds(15))
-                    .header("Content-Type", "application/x-www-form-urlencoded")
-                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-                    .header("Accept", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(formParams))
-                    .build();
+        String formParams = "client_id=" + URLEncoder.encode("pao-web", StandardCharsets.UTF_8)
+                + "&grant_type=" + URLEncoder.encode("password", StandardCharsets.UTF_8)
+                + "&username=" + URLEncoder.encode(cleanUsername, StandardCharsets.UTF_8)
+                + "&password=" + URLEncoder.encode(password.trim(), StandardCharsets.UTF_8)
+                + "&scope=" + URLEncoder.encode("openid roles-client-pao-web profile email roles-realm-xpedition", StandardCharsets.UTF_8);
 
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        for (String endpoint : tokenEndpoints) {
+            try {
+                HttpRequest request = HttpRequest.newBuilder()
+                        .uri(URI.create(endpoint))
+                        .timeout(Duration.ofSeconds(15))
+                        .header("Content-Type", "application/x-www-form-urlencoded")
+                        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                        .header("Accept", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(formParams))
+                        .build();
 
-            if (response.statusCode() == 200) {
-                JsonNode root = objectMapper.readTree(response.body());
-                String accessToken = root.path("access_token").asText();
-                String refreshToken = root.hasNonNull("refresh_token") ? root.path("refresh_token").asText() : null;
-                int expiresIn = root.hasNonNull("expires_in") ? root.path("expires_in").asInt(1800) : 1800;
+                HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
-                StudentProfile base = parseProfileFromTokens(accessToken, refreshToken, expiresIn, cleanUsername);
-                // Sesión indexada por código de alumno (aislamiento estricto por estudiante).
-                registerStudentSession(base.getStudentCode(), accessToken);
-                // El JWT pao-web NO incluye career/campus/cycle — enriquecer desde Portal GraphQL
-                StudentProfile profile = enrichProfileFromPortal(base, accessToken);
-                log.info("[UTP SSO Auth] Autenticación exitosa: {} | campus='{}' | carrera='{}' | ciclo={}",
-                        profile.getStudentCode(), profile.getCampus(), profile.getCareer(), profile.getCurrentCycle());
-                return profile;
-            } else if (response.statusCode() == 400 || response.statusCode() == 401 || response.statusCode() == 403) {
-                log.warn("[UTP SSO Auth] Credenciales rechazadas por sso.utp.edu.pe, status: {}", response.statusCode());
-                throw new AuthenticationException("Credenciales UTP inválidas.");
-            } else {
-                log.warn("[UTP SSO Auth] Falló autenticación en sso.utp.edu.pe, status: {}", response.statusCode());
-                throw new UpstreamServiceException("El servicio de autenticación UTP no está disponible temporalmente.");
+                if (response.statusCode() == 200) {
+                    JsonNode root = objectMapper.readTree(response.body());
+                    String accessToken = root.path("access_token").asText();
+                    String refreshToken = root.hasNonNull("refresh_token") ? root.path("refresh_token").asText() : null;
+                    int expiresIn = root.hasNonNull("expires_in") ? root.path("expires_in").asInt(1800) : 1800;
+
+                    StudentProfile base = parseProfileFromTokens(accessToken, refreshToken, expiresIn, cleanUsername);
+                    // Sesión indexada por código de alumno (aislamiento estricto por estudiante).
+                    registerStudentSession(base.getStudentCode(), accessToken);
+                    // El JWT pao-web NO incluye career/campus/cycle — enriquecer desde Portal GraphQL
+                    StudentProfile profile = enrichProfileFromPortal(base, accessToken);
+                    log.info("[UTP SSO Auth] Autenticación exitosa en {}: {} | campus='{}' | carrera='{}' | ciclo={}",
+                            endpoint, profile.getStudentCode(), profile.getCampus(), profile.getCareer(), profile.getCurrentCycle());
+                    return profile;
+                } else if (response.statusCode() == 400 || response.statusCode() == 401 || response.statusCode() == 403) {
+                    log.warn("[UTP SSO Auth] Credenciales rechazadas en {}, status: {}", endpoint, response.statusCode());
+                } else {
+                    log.warn("[UTP SSO Auth] Falló autenticación en {}, status: {}", endpoint, response.statusCode());
+                }
+            } catch (Exception e) {
+                log.error("[UTP SSO Auth] Error conectando con {}: {}", endpoint, e.getMessage());
             }
-        } catch (AuthenticationException | UpstreamServiceException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("[UTP SSO Auth] Error conectando con servidor SSO UTP: {}", e.getMessage());
-            throw new UpstreamServiceException("Error en autenticación UTP: " + e.getMessage(), e);
         }
+        throw new AuthenticationException("Credenciales UTP inválidas o servicio de autenticación no disponible.");
     }
 
     /**
@@ -734,45 +737,48 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
             throw new AuthenticationException("Refresh token inválido o vacío");
         }
 
-        try {
-            String formParams = "client_id=" + URLEncoder.encode("pao-web", StandardCharsets.UTF_8)
-                    + "&grant_type=" + URLEncoder.encode("refresh_token", StandardCharsets.UTF_8)
-                    + "&refresh_token=" + URLEncoder.encode(refreshToken.trim(), StandardCharsets.UTF_8);
+        List<String> tokenEndpoints = List.of(
+                "https://auth.utp.edu.pe/realms/Xpedition/protocol/openid-connect/token",
+                "https://sso.utp.edu.pe/auth/realms/Xpedition/protocol/openid-connect/token"
+        );
 
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create("https://sso.utp.edu.pe/auth/realms/Xpedition/protocol/openid-connect/token"))
-                    .timeout(Duration.ofSeconds(15))
-                    .header("Content-Type", "application/x-www-form-urlencoded")
-                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-                    .header("Accept", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(formParams))
-                    .build();
+        String formParams = "client_id=" + URLEncoder.encode("pao-web", StandardCharsets.UTF_8)
+                + "&grant_type=" + URLEncoder.encode("refresh_token", StandardCharsets.UTF_8)
+                + "&refresh_token=" + URLEncoder.encode(refreshToken.trim(), StandardCharsets.UTF_8);
 
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        for (String endpoint : tokenEndpoints) {
+            try {
+                HttpRequest request = HttpRequest.newBuilder()
+                        .uri(URI.create(endpoint))
+                        .timeout(Duration.ofSeconds(15))
+                        .header("Content-Type", "application/x-www-form-urlencoded")
+                        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                        .header("Accept", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(formParams))
+                        .build();
 
-            if (response.statusCode() == 200) {
-                JsonNode root = objectMapper.readTree(response.body());
-                String accessToken = root.path("access_token").asText();
-                String newRefreshToken = root.hasNonNull("refresh_token") ? root.path("refresh_token").asText() : refreshToken;
-                int expiresIn = root.hasNonNull("expires_in") ? root.path("expires_in").asInt(1800) : 1800;
+                HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
-                StudentProfile profile = parseProfileFromTokens(accessToken, newRefreshToken, expiresIn, "");
-                registerStudentSession(profile.getStudentCode(), accessToken);
-                log.info("[UTP SSO Refresh] Token renovado exitosamente para alumno: {}", profile.getStudentCode());
-                return profile;
-            } else if (response.statusCode() == 400 || response.statusCode() == 401 || response.statusCode() == 403) {
-                log.warn("[UTP SSO Refresh] Refresh token rechazado por sso.utp.edu.pe, status: {}", response.statusCode());
-                throw new AuthenticationException("Refresh token expirado o inválido en Keycloak UTP.");
-            } else {
-                log.warn("[UTP SSO Refresh] Falló renovación en sso.utp.edu.pe, status: {}", response.statusCode());
-                throw new UpstreamServiceException("El servicio de renovación de sesión UTP no está disponible temporalmente.");
+                if (response.statusCode() == 200) {
+                    JsonNode root = objectMapper.readTree(response.body());
+                    String accessToken = root.path("access_token").asText();
+                    String newRefreshToken = root.hasNonNull("refresh_token") ? root.path("refresh_token").asText() : refreshToken;
+                    int expiresIn = root.hasNonNull("expires_in") ? root.path("expires_in").asInt(1800) : 1800;
+
+                    StudentProfile profile = parseProfileFromTokens(accessToken, newRefreshToken, expiresIn, "");
+                    registerStudentSession(profile.getStudentCode(), accessToken);
+                    log.info("[UTP SSO Refresh] Token renovado exitosamente en {} para alumno: {}", endpoint, profile.getStudentCode());
+                    return profile;
+                } else if (response.statusCode() == 400 || response.statusCode() == 401 || response.statusCode() == 403) {
+                    log.warn("[UTP SSO Refresh] Refresh token rechazado en {}, status: {}", endpoint, response.statusCode());
+                } else {
+                    log.warn("[UTP SSO Refresh] Falló renovación en {}, status: {}", endpoint, response.statusCode());
+                }
+            } catch (Exception e) {
+                log.error("[UTP SSO Refresh] Error conectando con {}: {}", endpoint, e.getMessage());
             }
-        } catch (AuthenticationException | UpstreamServiceException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("[UTP SSO Refresh] Error conectando con servidor SSO UTP: {}", e.getMessage());
-            throw new UpstreamServiceException("Error renovando sesión UTP: " + e.getMessage(), e);
         }
+        throw new AuthenticationException("Refresh token expirado o inválido en Keycloak UTP.");
     }
 
     private StudentProfile parseProfileFromTokens(String accessToken, String refreshToken, int expiresIn, String defaultCode) {
