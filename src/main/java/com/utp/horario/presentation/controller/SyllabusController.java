@@ -72,6 +72,9 @@ public class SyllabusController {
             String token = authHeader != null && authHeader.startsWith("Bearer ")
                     ? authHeader.substring(7).trim()
                     : null;
+            if (token == null || token.isBlank()) {
+                return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP para filtrar por estudiante"));
+            }
             List<Course> enrolled = enrolledCourses(studentId, period, token);
             Set<String> enrolledCodes = enrolledCodes(enrolled);
             Set<String> enrolledNames = enrolledNames(enrolled);

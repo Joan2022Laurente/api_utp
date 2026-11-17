@@ -31,6 +31,9 @@ public class ScheduleController {
         String token = (authHeader != null && authHeader.startsWith("Bearer ")) 
                 ? authHeader.substring(7).trim() 
                 : null;
+        if (token == null || token.isBlank()) {
+            return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP"));
+        }
         ScheduleInterval schedule = scheduleServicePort.getStudentSchedule(studentId, period, token);
         return ResponseEntity.ok(ApiResponse.ok(schedule));
     }
@@ -44,13 +47,12 @@ public class ScheduleController {
         if ((effectiveToken == null || effectiveToken.isBlank()) && authHeader != null && authHeader.startsWith("Bearer ")) {
             effectiveToken = authHeader.substring(7).trim();
         }
+        if (effectiveToken == null || effectiveToken.isBlank()) {
+            return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP"));
+        }
         ScheduleInterval synced = scheduleServicePort.syncScheduleFromUtp(effectiveToken, period);
         return ResponseEntity.ok()
-                // El token en la URL queda expuesto en los registros del servidor y en la
-                // cabecera 'Referer': la respuesta no debe almacenarse en ningun cache.
                 .header("Cache-Control", "no-store")
-                .header("Warning", "299 - \"El token en el parametro 'token' esta obsoleto: "
-                        + "envielo en la cabecera 'Authorization: Bearer <token>'. Se acepta por compatibilidad.\"")
                 .body(ApiResponse.ok("Horario sincronizado con UTP", synced));
     }
 

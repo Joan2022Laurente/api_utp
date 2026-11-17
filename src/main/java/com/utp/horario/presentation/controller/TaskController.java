@@ -37,6 +37,9 @@ public class TaskController {
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
 
         String token = extractToken(authHeader);
+        if (token == null || token.isBlank()) {
+            return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP"));
+        }
         TaskSpecification task = academicTaskServicePort.getTaskDetail(sectionId, activityId, token);
         return ResponseEntity.ok(ApiResponse.ok(task));
     }
@@ -60,6 +63,9 @@ public class TaskController {
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
 
         String token = extractToken(authHeader);
+        if (token == null || token.isBlank()) {
+            return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP"));
+        }
         List<AcademicActivity> activities = academicTaskServicePort.getCalendarActivitiesFiltered(
                 dateToQuery, intervalMode, token, week, status, onlyGraded, type);
         return ResponseEntity.ok(ApiResponse.ok("Actividades de calendario obtenidas exitosamente", activities));
@@ -74,6 +80,9 @@ public class TaskController {
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
 
         String token = extractToken(authHeader);
+        if (token == null || token.isBlank()) {
+            return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP"));
+        }
         List<AcademicActivity> upcoming = academicTaskServicePort.getUpcomingEvaluations(token, limit);
         return ResponseEntity.ok(ApiResponse.ok("Próximas evaluaciones ponderadas obtenidas", upcoming));
     }

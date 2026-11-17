@@ -31,6 +31,9 @@ public class CourseSummaryController {
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
 
         String token = extractToken(authHeader);
+        if (token == null || token.isBlank()) {
+            return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP"));
+        }
         CourseSummaryData summary = academicTaskServicePort.getCourseSummary(periodId, token);
         return ResponseEntity.ok(ApiResponse.ok("Resumen oficial de cursos y calificaciones obtenido", summary));
     }
@@ -48,6 +51,9 @@ public class CourseSummaryController {
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
 
         String token = extractToken(authHeader);
+        if (token == null || token.isBlank()) {
+            return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP"));
+        }
         com.utp.horario.domain.model.GradeSimulationResult result = academicTaskServicePort.simulateCourseGrade(courseCode, targetGrade, periodId, token);
         return ResponseEntity.ok(ApiResponse.ok("Simulación de calificación calculada exitosamente", result));
     }
@@ -63,6 +69,9 @@ public class CourseSummaryController {
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
 
         String token = extractToken(authHeader);
+        if (token == null || token.isBlank()) {
+            return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP"));
+        }
         java.util.List<com.utp.horario.domain.model.GradeSimulationResult> results = academicTaskServicePort.simulateAllCourses(targetGrade, periodId, token);
         return ResponseEntity.ok(ApiResponse.ok("Simulación de todos los cursos calculada exitosamente", results));
     }

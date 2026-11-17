@@ -708,15 +708,6 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         if (raw.regionMatches(true, 0, "Bearer ", 0, 7)) {
             raw = raw.substring(7).trim();
         }
-        // Si el propio estudiante tiene una sesión renovada registrada, se usa SU token.
-        // La búsqueda está indexada por su propio código: jamás devuelve el de otro.
-        String studentCode = extractStudentCodeFromToken(raw);
-        if (!studentCode.isBlank()) {
-            String ownSessionToken = resolveTokenForStudent(studentCode);
-            if (!ownSessionToken.isBlank()) {
-                return ownSessionToken;
-            }
-        }
         return raw;
     }
 
