@@ -2,7 +2,9 @@ package com.utp.horario.infrastructure.external;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.utp.horario.domain.exception.AuthenticationException;import com.utp.horario.domain.exception.UpstreamServiceException;
+import com.utp.horario.domain.exception.AuthenticationException;
+import com.utp.horario.domain.exception.ResourceNotFoundException;
+import com.utp.horario.domain.exception.UpstreamServiceException;
 import com.utp.horario.domain.model.AcademicActivity;
 import com.utp.horario.domain.model.ClassSession;
 import com.utp.horario.domain.model.Course;
@@ -79,16 +81,6 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
     private final Map<String, Long> paoDiscoveryAttempts = new ConcurrentHashMap<>();
 
     private static final long PAO_DISCOVERY_TTL_MILLIS = 30 * 60 * 1000L;
-
-    /**
-     * Sesiones activas indexadas <b>por código de alumno</b>.
-     *
-     * <p>Reemplaza al antiguo campo global {@code lastActiveToken}, que provocaba una fuga
-     * de identidad: cualquier petición sin token tomaba prestado el token del último
-     * estudiante que se autenticó en la instancia. Con este registro, el token de un
-     * estudiante solo es resoluble por su propio código y nunca por el de otro.</p>
-     */
-    private final Map<String, String> studentSessionRegistry = new ConcurrentHashMap<>();
 
     private static final Pattern EVAL_PATTERN = Pattern.compile("(?i)(PC\\d*|AP\\d*|EC\\d*|TI\\d*|EP|EF|EXFN|EXPA|PROY|AVANCE|PORTAFOLIO|PARTICIPACI[OÓ]N|EXAMEN)");
 
@@ -661,8 +653,6 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                     int expiresIn = root.hasNonNull("expires_in") ? root.path("expires_in").asInt(1800) : 1800;
 
                     StudentProfile base = parseProfileFromTokens(accessToken, refreshToken, expiresIn, cleanUsername);
-                    // Sesión indexada por código de alumno (aislamiento estricto por estudiante).
-                    registerStudentSession(base.getStudentCode(), accessToken);
                     // El JWT pao-web NO incluye career/campus/cycle — enriquecer desde Portal GraphQL
                     StudentProfile profile = enrichProfileFromPortal(base, accessToken);
                     log.info("[UTP SSO Auth] Autenticación exitosa en {}: {} | campus='{}' | carrera='{}' | ciclo={}",
@@ -681,22 +671,11 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
     }
 
     /**
-     * Registra la sesión activa del estudiante en el registro aislado por código de alumno.
-     */
-    private void registerStudentSession(String studentCode, String accessToken) {
-        if (studentCode == null || studentCode.isBlank() || accessToken == null || accessToken.isBlank()) {
-            return;
-        }
-        studentSessionRegistry.put(studentCode.toUpperCase(), accessToken);
-    }
-
-    /**
      * Resuelve el token efectivo de una petición.
      *
-     * <p><b>Regla de aislamiento de identidad:</b> si la petición no trae token propio,
-     * NO se presta el token de ningún otro estudiante. Anteriormente se recurría a un
-     * campo global {@code lastActiveToken} que contenía el token del último usuario
-     * autenticado en la instancia, provocando fugas cruzadas de identidad.</p>
+     * <p><b>Regla de aislamiento de identidad:</b> el adaptador opera de forma 100% stateless:
+     * nunca almacena ni presta sesiones en memoria. Si la petición no trae token propio,
+     * se devuelve cadena vacía y se abortan las consultas autenticadas.</p>
      *
      * @return el token propio normalizado, o cadena vacía si la petición es anónima.
      */
@@ -709,17 +688,6 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
             raw = raw.substring(7).trim();
         }
         return raw;
-    }
-
-    /**
-     * Resuelve el token de un estudiante <b>concreto</b> a partir del registro de sesiones.
-     * Nunca devuelve el token de un estudiante distinto al solicitado.
-     */
-    private String resolveTokenForStudent(String studentCode) {
-        if (studentCode == null || studentCode.isBlank()) {
-            return "";
-        }
-        return studentSessionRegistry.getOrDefault(studentCode.toUpperCase(), "");
     }
 
     @Override
@@ -757,7 +725,6 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                     int expiresIn = root.hasNonNull("expires_in") ? root.path("expires_in").asInt(1800) : 1800;
 
                     StudentProfile profile = parseProfileFromTokens(accessToken, newRefreshToken, expiresIn, "");
-                    registerStudentSession(profile.getStudentCode(), accessToken);
                     log.info("[UTP SSO Refresh] Token renovado exitosamente en {} para alumno: {}", endpoint, profile.getStudentCode());
                     return profile;
                 } else if (response.statusCode() == 400 || response.statusCode() == 401 || response.statusCode() == 403) {
@@ -929,7 +896,11 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
 
     @Override
     public ScheduleInterval fetchSchedule(String token, String period) {
-        if (token != null && token.contains(".")) {
+        if (token == null || token.isBlank()) {
+            throw new AuthenticationException("Se requiere token de sesión institucional UTP.");
+        }
+
+        if (token.contains(".")) {
             // 1. Intentar extracción 100% real de aulas, pabellones y docentes via Portal GraphQL
             try {
                 ScheduleInterval graphqlInterval = fetchScheduleFromPortalGraphQL(token, period);
@@ -974,16 +945,26 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                         if (intervalNode != null && intervalNode.hasNonNull("events")) {
                             return parsePaoCalendarResponse(intervalNode, extractStudentCodeFromToken(token));
                         }
+                    } else if (response.statusCode() == 401 || response.statusCode() == 403) {
+                        log.warn("[UTP PAO Calendar] Sesión rechazada por PAO gateway (HTTP {})", response.statusCode());
+                        throw new AuthenticationException("Sesión institucional UTP expirada o no autorizada en PAO (HTTP " + response.statusCode() + ").");
+                    } else if (response.statusCode() >= 500) {
+                        log.error("[UTP PAO Calendar] Error interno de PAO gateway (HTTP {})", response.statusCode());
+                        throw new UpstreamServiceException("El portal institucional UTP (PAO) no está disponible (HTTP " + response.statusCode() + ").");
                     } else {
                         log.warn("[UTP PAO Calendar] Status no exitoso ({}) desde PAO gateway", response.statusCode());
+                        throw new UpstreamServiceException("Respuesta inesperada de UTP PAO (HTTP " + response.statusCode() + ").");
                     }
                 }
+            } catch (AuthenticationException | UpstreamServiceException e) {
+                throw e;
             } catch (Exception e) {
                 log.warn("[UTP PAO Calendar] Excepción al consultar horario en vivo UTP: {}", e.getMessage());
+                throw new UpstreamServiceException("Error de conexión al consultar horario en UTP: " + e.getMessage(), e);
             }
         }
 
-        // Sin sesión activa o fallo en UTP: estructura vacía limpia
+        // Si el token es válido pero no hay eventos programados (ej. periodo de receso)
         return ScheduleInterval.builder()
                 .id("interval-empty")
                 .periodName(period != null ? period : "2026 - Ciclo 2 Agosto")
@@ -1684,12 +1665,21 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                         log.info("[UtpPortalGatewayAdapter] Texto de sílabo extraído exitosamente ({} caracteres)", extracted != null ? extracted.length() : 0);
                         return extracted;
                     }
+                } else if (pdfRes.statusCode() == 401 || pdfRes.statusCode() == 403) {
+                    log.warn("[UtpPortalGatewayAdapter] Descarga rechazada de PDF de S3, status: {}", pdfRes.statusCode());
+                    throw new AuthenticationException("Sesión institucional UTP expirada o no autorizada para descargar sílabo (HTTP " + pdfRes.statusCode() + ").");
+                } else if (pdfRes.statusCode() == 404) {
+                    throw new ResourceNotFoundException("PDF de sílabo no encontrado en almacenamiento institucional para: " + courseCodeOrUrl);
                 } else {
                     log.warn("[UtpPortalGatewayAdapter] Error descargando PDF de S3, status: {}", pdfRes.statusCode());
+                    throw new UpstreamServiceException("Almacenamiento institucional UTP respondió con error HTTP " + pdfRes.statusCode() + " al descargar sílabo.");
                 }
             }
+        } catch (AuthenticationException | ResourceNotFoundException | UpstreamServiceException e) {
+            throw e;
         } catch (Exception e) {
             log.warn("[UtpPortalGatewayAdapter] Error descargando/extrayendo PDF de sílabo para '{}': {}", courseCodeOrUrl, e.getMessage());
+            throw new UpstreamServiceException("Error al procesar PDF de sílabo: " + e.getMessage(), e);
         }
 
         return "";
@@ -1917,22 +1907,21 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                         .rubricScore(rubricScore)
                         .gradingRubric(rubricCriterions)
                         .build();
+            } else if (resp.statusCode() == 401 || resp.statusCode() == 403) {
+                log.warn("[UtpPortalGatewayAdapter] Error de autenticación {} al obtener tarea {}", resp.statusCode(), activityId);
+                throw new AuthenticationException("Sesión institucional UTP expirada o no autorizada para consultar la tarea (HTTP " + resp.statusCode() + ").");
+            } else if (resp.statusCode() == 404) {
+                throw new ResourceNotFoundException("Tarea no encontrada en el portal UTP: " + activityId);
             } else {
                 log.warn("[UtpPortalGatewayAdapter] Error {} al obtener tarea {}: {}", resp.statusCode(), activityId, resp.body());
+                throw new UpstreamServiceException("Error HTTP " + resp.statusCode() + " al consultar especificación de tarea en UTP.");
             }
+        } catch (AuthenticationException | ResourceNotFoundException | UpstreamServiceException re) {
+            throw re;
         } catch (Exception e) {
             log.error("[UtpPortalGatewayAdapter] Excepción al consultar homework resume {}: {}", activityId, e.getMessage());
+            throw new UpstreamServiceException("Error de conexión al consultar tarea en UTP: " + e.getMessage(), e);
         }
-
-        return TaskSpecification.builder()
-                .id(activityId)
-                .title("Asignación no disponible")
-                .courseCode(resolvedCourseCode)
-                .sectionId(sectionId)
-                .descriptionMarkdown("")
-                .gradingRubric(new ArrayList<>())
-                .submissionTypes(List.of("online_upload"))
-                .build();
     }
 
     @Override
@@ -2009,17 +1998,22 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                                 .build());
                     }
                 }
+            } else if (resp.statusCode() == 401 || resp.statusCode() == 403) {
+                invalidatePaoUserId(extractStudentCodeFromToken(effectiveToken), userId);
+                log.warn("[UtpPortalGatewayAdapter] Error {} consultando calendar activities: sesión no autorizada o expirada", resp.statusCode());
+                throw new AuthenticationException("Sesión institucional UTP expirada o no autorizada en PAO (HTTP " + resp.statusCode() + ").");
+            } else if (resp.statusCode() >= 500) {
+                log.error("[UtpPortalGatewayAdapter] Error {} consultando calendar activities en PAO", resp.statusCode());
+                throw new UpstreamServiceException("El servicio de calendario PAO de UTP respondió con error HTTP " + resp.statusCode() + ".");
             } else {
-                log.warn("[UtpPortalGatewayAdapter] Error {} consultando calendar activities: {}. "
-                                + "Si el codigo es 403, configure la correspondencia PAO del alumno en 'utp.pao-user-map' "
-                                + "(o UTP_PAO_USER_MAP): el 'user-id' debe ser el paoUserId, no el 'sub' del JWT SSO.",
-                        resp.statusCode(), resp.body());
-                if (resp.statusCode() == 401 || resp.statusCode() == 403) {
-                    invalidatePaoUserId(extractStudentCodeFromToken(effectiveToken), userId);
-                }
+                log.warn("[UtpPortalGatewayAdapter] Error {} consultando calendar activities", resp.statusCode());
+                throw new UpstreamServiceException("Error HTTP " + resp.statusCode() + " al consultar calendario de actividades UTP.");
             }
+        } catch (AuthenticationException | UpstreamServiceException e) {
+            throw e;
         } catch (Exception e) {
             log.error("[UtpPortalGatewayAdapter] Excepción en fetchCalendarActivities: {}", e.getMessage());
+            throw new UpstreamServiceException("Error de conexión al consultar actividades de calendario UTP: " + e.getMessage(), e);
         }
 
         return activities;
@@ -2179,11 +2173,21 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                                 .build());
                     }
                 }
+            } else if (resp.statusCode() == 401 || resp.statusCode() == 403) {
+                log.warn("[UtpPortalGatewayAdapter] Error {} en GetCourseSummary: sesión expirada o no autorizada", resp.statusCode());
+                throw new AuthenticationException("Sesión institucional UTP expirada o no autorizada en Portal UTP (HTTP " + resp.statusCode() + ").");
+            } else if (resp.statusCode() >= 500) {
+                log.error("[UtpPortalGatewayAdapter] Error {} en GetCourseSummary: fallo upstream", resp.statusCode());
+                throw new UpstreamServiceException("El portal institucional UTP no está disponible (HTTP " + resp.statusCode() + ").");
             } else {
-                log.warn("[UtpPortalGatewayAdapter] Error {} en GetCourseSummary: {}", resp.statusCode(), resp.body());
+                log.warn("[UtpPortalGatewayAdapter] Error {} en GetCourseSummary", resp.statusCode());
+                throw new UpstreamServiceException("Error HTTP " + resp.statusCode() + " al consultar resumen de cursos UTP.");
             }
+        } catch (AuthenticationException | UpstreamServiceException e) {
+            throw e;
         } catch (Exception e) {
             log.error("[UtpPortalGatewayAdapter] Excepción en fetchCourseSummary: {}", e.getMessage());
+            throw new UpstreamServiceException("Error de conexión al consultar resumen de cursos UTP: " + e.getMessage(), e);
         }
 
         return CourseSummaryData.builder()

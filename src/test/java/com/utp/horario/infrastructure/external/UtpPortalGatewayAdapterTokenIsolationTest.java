@@ -6,66 +6,38 @@ import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Pruebas de regresión del aislamiento de identidad en {@link UtpPortalGatewayAdapter}.
  *
- * <p>Reproducen el hallazgo crítico C-01: el campo global {@code lastActiveToken} permitía
- * que una petición sin token tomara prestado el token del último estudiante autenticado
- * en la instancia.</p>
+ * <p>Garantiza que el adaptador es 100% stateless con respecto a tokens de usuario:
+ * no existe ningún campo global ni registro en memoria que almacene tokens ni permita
+ * que una petición tome prestada la identidad de otro estudiante.</p>
  */
 class UtpPortalGatewayAdapterTokenIsolationTest {
 
     private final UtpPortalGatewayAdapter adapter = new UtpPortalGatewayAdapter();
 
     @Test
-    @DisplayName("No existe ningún token global compartido entre estudiantes")
-    void noGlobalSharedTokenFieldExists() throws Exception {
+    @DisplayName("No existe ningún token global ni registro de sesiones en memoria")
+    void noSessionRegistryOrGlobalSharedTokenFieldExists() {
         for (Field field : UtpPortalGatewayAdapter.class.getDeclaredFields()) {
-            assertTrue(!field.getName().toLowerCase().contains("lastactivetoken"),
+            String name = field.getName().toLowerCase();
+            assertTrue(!name.contains("lastactivetoken"),
                     "El campo global 'lastActiveToken' fue reintroducido y reintroduciría la fuga de identidad");
+            assertTrue(!name.contains("studentsessionregistry"),
+                    "El registro en memoria 'studentSessionRegistry' fue reintroducido; el adaptador debe ser 100% stateless");
         }
     }
 
     @Test
-    @DisplayName("El estado de sesión es un ConcurrentHashMap indexado por estudiante")
-    void sessionStateIsIsolatedPerStudent() throws Exception {
-        Field field = UtpPortalGatewayAdapter.class.getDeclaredField("studentSessionRegistry");
-        field.setAccessible(true);
-
-        Object registry = field.get(adapter);
-
-        assertNotNull(registry);
-        assertTrue(registry instanceof ConcurrentHashMap,
-                "El registro de sesiones debe ser un ConcurrentHashMap (aislamiento por clave de estudiante)");
-    }
-
-    @Test
-    @DisplayName("Una petición sin token NO toma prestado el token de otro estudiante")
-    void anonymousRequestNeverBorrowsAnotherStudentToken() throws Exception {
-        // Se simula que el alumno U99999999 tiene una sesión activa registrada.
-        Method register = UtpPortalGatewayAdapter.class.getDeclaredMethod(
-                "registerStudentSession", String.class, String.class);
-        register.setAccessible(true);
-        register.invoke(adapter, "U99999999", TestTokens.validFor("U99999999"));
-
-        Field field = UtpPortalGatewayAdapter.class.getDeclaredField("studentSessionRegistry");
-        field.setAccessible(true);
-        @SuppressWarnings("unchecked")
-        Map<String, String> registry = (Map<String, String>) field.get(adapter);
-        assertEquals(1, registry.size(), "La sesión del alumno debe registrarse bajo su propio código");
-
-        // Petición anónima: NO debe resolverse el PDF con el token del alumno registrado.
+    @DisplayName("Una petición sin token devuelve cadena vacía y nunca toma prestado token ajeno")
+    void anonymousRequestNeverBorrowsAnotherStudentToken() {
         String text = adapter.fetchSyllabusPdfText(null, "100000ST61");
-
-        assertEquals("", text,
-                "Una petición sin token no debe usar el token de ningún otro estudiante");
+        assertEquals("", text, "Una petición sin token no debe usar el token de ningún otro estudiante");
     }
 
     @Test

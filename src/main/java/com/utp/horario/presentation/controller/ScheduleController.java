@@ -1,9 +1,11 @@
 package com.utp.horario.presentation.controller;
 
+import com.utp.horario.application.service.security.SessionTokenInspector;
 import com.utp.horario.domain.model.ScheduleInterval;
 import com.utp.horario.domain.port.in.ScheduleServicePort;
 import com.utp.horario.presentation.dto.ApiResponse;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -28,11 +30,9 @@ public class ScheduleController {
             @org.springframework.web.bind.annotation.RequestHeader(value = "Authorization", required = false) String authHeader,
             @RequestParam(defaultValue = "current-student") String studentId,
             @RequestParam(defaultValue = "2026 - Ciclo 2 Agosto") String period) {
-        String token = (authHeader != null && authHeader.startsWith("Bearer ")) 
-                ? authHeader.substring(7).trim() 
-                : null;
-        if (token == null || token.isBlank()) {
-            return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP"));
+        String token = SessionTokenInspector.extractBearerToken(authHeader);
+        if (token == null) {
+            return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP con formato 'Bearer <token>'"));
         }
         ScheduleInterval schedule = scheduleServicePort.getStudentSchedule(studentId, period, token);
         return ResponseEntity.ok(ApiResponse.ok(schedule));
@@ -43,12 +43,12 @@ public class ScheduleController {
             @org.springframework.web.bind.annotation.RequestHeader(value = "Authorization", required = false) String authHeader,
             @RequestParam(required = false) String token,
             @RequestParam(defaultValue = "2026 - Ciclo 2 Agosto") String period) {
-        String effectiveToken = token;
-        if ((effectiveToken == null || effectiveToken.isBlank()) && authHeader != null && authHeader.startsWith("Bearer ")) {
-            effectiveToken = authHeader.substring(7).trim();
+        String effectiveToken = SessionTokenInspector.extractBearerToken(authHeader);
+        if (effectiveToken == null && token != null && !token.isBlank()) {
+            effectiveToken = SessionTokenInspector.extractBearerToken("Bearer " + token.trim());
         }
-        if (effectiveToken == null || effectiveToken.isBlank()) {
-            return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP"));
+        if (effectiveToken == null) {
+            return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP con formato 'Bearer <token>'"));
         }
         ScheduleInterval synced = scheduleServicePort.syncScheduleFromUtp(effectiveToken, period);
         return ResponseEntity.ok()
@@ -62,9 +62,12 @@ public class ScheduleController {
             @org.springframework.web.bind.annotation.RequestHeader(value = "Authorization", required = false) String authHeader,
             @RequestParam(defaultValue = "current-student") String studentId,
             @RequestParam(defaultValue = "2026 - Ciclo 2 Agosto") String period) {
-        String token = (authHeader != null && authHeader.startsWith("Bearer ")) 
-                ? authHeader.substring(7).trim() 
-                : null;
+        String token = SessionTokenInspector.extractBearerToken(authHeader);
+        if (token == null) {
+            return ResponseEntity.status(401)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body("{\"success\":false,\"error\":\"Se requiere token de sesión institucional UTP con formato 'Bearer <token>'\"}");
+        }
         String icsContent = scheduleServicePort.exportScheduleToIcs(studentId, period, token);
         return ResponseEntity.ok()
                 .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"horario_utp.ics\"")

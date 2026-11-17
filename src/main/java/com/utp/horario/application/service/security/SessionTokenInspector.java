@@ -75,6 +75,28 @@ public final class SessionTokenInspector {
     }
 
     /**
+     * Extrae y valida estrictamente un token Bearer de una cabecera Authorization o cadena.
+     * Exige que empiece con el prefijo "Bearer ", no sea blanco y contenga una estructura JWT válida no expirada.
+     *
+     * @param authHeader Encabezado Authorization (ej. "Bearer eyJhbGciOi...")
+     * @return El token JWT limpio si es válido, o null si está ausente, no es Bearer, o no es un JWT válido.
+     */
+    public static String extractBearerToken(String authHeader) {
+        if (authHeader == null || authHeader.isBlank()) {
+            return null;
+        }
+        String trimmed = authHeader.trim();
+        if (!trimmed.regionMatches(true, 0, BEARER_PREFIX, 0, BEARER_PREFIX.length())) {
+            return null;
+        }
+        String token = trimmed.substring(BEARER_PREFIX.length()).trim();
+        if (token.isBlank() || tryInspect(token).isEmpty()) {
+            return null;
+        }
+        return token;
+    }
+
+    /**
      * Inspecciona el token validando su vigencia temporal.
      *
      * @throws AuthenticationException si el token está ausente, malformado, expirado o todavía no vigente.

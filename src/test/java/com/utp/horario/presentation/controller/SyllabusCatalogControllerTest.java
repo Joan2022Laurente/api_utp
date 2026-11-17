@@ -6,6 +6,7 @@ import com.utp.horario.domain.model.Syllabus;
 import com.utp.horario.domain.port.in.ScheduleServicePort;
 import com.utp.horario.domain.port.in.SyllabusServicePort;
 import com.utp.horario.presentation.exception.GlobalExceptionHandler;
+import com.utp.horario.support.TestTokens;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -25,7 +26,7 @@ import static org.mockito.Mockito.when;
  *
  * <p>La garantia importante es que el comportamiento por defecto <b>no cambia</b>: el
  * catalogo completo se sigue devolviendo tal cual. El filtrado por alumno es una via
- * optativa ({@code scope=student}) que las apps existentes no usan.</p>
+ * optativa ({@code scope=student}) que exige Bearer token de sesion valida.</p>
  */
 class SyllabusCatalogControllerTest {
 
@@ -59,14 +60,24 @@ class SyllabusCatalogControllerTest {
     }
 
     @Test
-    @DisplayName("Con scope=student se devuelven solo los cursos matriculados")
+    @DisplayName("Con scope=student sin token Bearer devuelve 401 Unauthorized")
+    void studentScopeWithoutTokenReturns401Unauthorized() throws Exception {
+        mockMvc.perform(get("/syllabus").param("scope", "student"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.success").value(false));
+    }
+
+    @Test
+    @DisplayName("Con scope=student y Bearer token se devuelven solo los cursos matriculados")
     void studentScopeFiltersByEnrolledCourses() throws Exception {
         when(scheduleServicePort.getStudentSchedule(Mockito.anyString(), Mockito.anyString(), Mockito.any()))
                 .thenReturn(ScheduleInterval.builder()
                         .courses(List.of(Course.builder().code("100000SI82").name("FORMACION PARA LA INVESTIGACION").build()))
                         .build());
 
-        mockMvc.perform(get("/syllabus").param("scope", "student"))
+        mockMvc.perform(get("/syllabus")
+                        .param("scope", "student")
+                        .header("Authorization", "Bearer " + TestTokens.validFor("U12345678")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.length()").value(1))
                 .andExpect(jsonPath("$.data[0].courseCode").value("100000SI82"));
@@ -78,7 +89,9 @@ class SyllabusCatalogControllerTest {
         when(scheduleServicePort.getStudentSchedule(Mockito.anyString(), Mockito.anyString(), Mockito.any()))
                 .thenReturn(ScheduleInterval.builder().courses(List.of()).build());
 
-        mockMvc.perform(get("/syllabus").param("scope", "student"))
+        mockMvc.perform(get("/syllabus")
+                        .param("scope", "student")
+                        .header("Authorization", "Bearer " + TestTokens.validFor("U12345678")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.length()").value(0));

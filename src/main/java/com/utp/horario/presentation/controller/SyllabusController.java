@@ -1,5 +1,6 @@
 package com.utp.horario.presentation.controller;
 
+import com.utp.horario.application.service.security.SessionTokenInspector;
 import com.utp.horario.domain.model.Course;
 import com.utp.horario.domain.model.ScheduleInterval;
 import com.utp.horario.domain.model.Syllabus;
@@ -69,11 +70,9 @@ public class SyllabusController {
         List<Syllabus> list = syllabusServicePort.getAllSyllabiForStudent(studentId);
 
         if ("student".equalsIgnoreCase(scope)) {
-            String token = authHeader != null && authHeader.startsWith("Bearer ")
-                    ? authHeader.substring(7).trim()
-                    : null;
-            if (token == null || token.isBlank()) {
-                return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP para filtrar por estudiante"));
+            String token = SessionTokenInspector.extractBearerToken(authHeader);
+            if (token == null) {
+                return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP con formato 'Bearer <token>' para filtrar por estudiante"));
             }
             List<Course> enrolled = enrolledCourses(studentId, period, token);
             Set<String> enrolledCodes = enrolledCodes(enrolled);

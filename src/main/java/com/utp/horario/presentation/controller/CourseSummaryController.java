@@ -1,5 +1,6 @@
 package com.utp.horario.presentation.controller;
 
+import com.utp.horario.application.service.security.SessionTokenInspector;
 import com.utp.horario.domain.model.CourseSummaryData;
 import com.utp.horario.domain.port.in.AcademicTaskServicePort;
 import com.utp.horario.presentation.dto.ApiResponse;
@@ -30,9 +31,9 @@ public class CourseSummaryController {
             @Parameter(description = "Token Bearer SSO de UTP")
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
 
-        String token = extractToken(authHeader);
-        if (token == null || token.isBlank()) {
-            return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP"));
+        String token = SessionTokenInspector.extractBearerToken(authHeader);
+        if (token == null) {
+            return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP con formato 'Bearer <token>'"));
         }
         CourseSummaryData summary = academicTaskServicePort.getCourseSummary(periodId, token);
         return ResponseEntity.ok(ApiResponse.ok("Resumen oficial de cursos y calificaciones obtenido", summary));
@@ -50,9 +51,9 @@ public class CourseSummaryController {
             @Parameter(description = "Token Bearer SSO de UTP")
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
 
-        String token = extractToken(authHeader);
-        if (token == null || token.isBlank()) {
-            return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP"));
+        String token = SessionTokenInspector.extractBearerToken(authHeader);
+        if (token == null) {
+            return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP con formato 'Bearer <token>'"));
         }
         com.utp.horario.domain.model.GradeSimulationResult result = academicTaskServicePort.simulateCourseGrade(courseCode, targetGrade, periodId, token);
         return ResponseEntity.ok(ApiResponse.ok("Simulación de calificación calculada exitosamente", result));
@@ -68,18 +69,11 @@ public class CourseSummaryController {
             @Parameter(description = "Token Bearer SSO de UTP")
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
 
-        String token = extractToken(authHeader);
-        if (token == null || token.isBlank()) {
-            return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP"));
+        String token = SessionTokenInspector.extractBearerToken(authHeader);
+        if (token == null) {
+            return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP con formato 'Bearer <token>'"));
         }
         java.util.List<com.utp.horario.domain.model.GradeSimulationResult> results = academicTaskServicePort.simulateAllCourses(targetGrade, periodId, token);
         return ResponseEntity.ok(ApiResponse.ok("Simulación de todos los cursos calculada exitosamente", results));
-    }
-
-    private String extractToken(String authHeader) {
-        if (authHeader != null && authHeader.startsWith("Bearer ")) {
-            return authHeader.substring(7).trim();
-        }
-        return authHeader;
     }
 }

@@ -1,5 +1,6 @@
 package com.utp.horario.presentation.controller;
 
+import com.utp.horario.application.service.security.SessionTokenInspector;
 import com.utp.horario.domain.model.AcademicActivity;
 import com.utp.horario.domain.model.TaskSpecification;
 import com.utp.horario.domain.port.in.AcademicTaskServicePort;
@@ -36,9 +37,9 @@ public class TaskController {
             @Parameter(description = "Token Bearer SSO de UTP")
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
 
-        String token = extractToken(authHeader);
-        if (token == null || token.isBlank()) {
-            return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP"));
+        String token = SessionTokenInspector.extractBearerToken(authHeader);
+        if (token == null) {
+            return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP con formato 'Bearer <token>'"));
         }
         TaskSpecification task = academicTaskServicePort.getTaskDetail(sectionId, activityId, token);
         return ResponseEntity.ok(ApiResponse.ok(task));
@@ -53,18 +54,18 @@ public class TaskController {
             @RequestParam(required = false, defaultValue = "period") String intervalMode,
             @Parameter(description = "Filtrar por número de semana académica (ej. 7)")
             @RequestParam(required = false) Integer week,
-            @Parameter(description = "Filtrar por estado de entrega ('PENDING', 'DELIVERED', 'MISSING', 'PROGRAMMED')")
+            @Parameter(description = "Filtrar por estado ('PENDING', 'SUBMITTED', 'GRADED', 'LATE')")
             @RequestParam(required = false) String status,
-            @Parameter(description = "Filtrar únicamente evaluaciones calificadas / ponderadas (true/false)")
+            @Parameter(description = "Solo evaluaciones calificadas con peso")
             @RequestParam(required = false) Boolean onlyGraded,
             @Parameter(description = "Filtrar por tipo de actividad ('HOMEWORK', 'FORUM', 'EVALUATION')")
             @RequestParam(required = false) String type,
             @Parameter(description = "Token Bearer SSO de UTP")
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
 
-        String token = extractToken(authHeader);
-        if (token == null || token.isBlank()) {
-            return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP"));
+        String token = SessionTokenInspector.extractBearerToken(authHeader);
+        if (token == null) {
+            return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP con formato 'Bearer <token>'"));
         }
         List<AcademicActivity> activities = academicTaskServicePort.getCalendarActivitiesFiltered(
                 dateToQuery, intervalMode, token, week, status, onlyGraded, type);
@@ -79,18 +80,11 @@ public class TaskController {
             @Parameter(description = "Token Bearer SSO de UTP")
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
 
-        String token = extractToken(authHeader);
-        if (token == null || token.isBlank()) {
-            return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP"));
+        String token = SessionTokenInspector.extractBearerToken(authHeader);
+        if (token == null) {
+            return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP con formato 'Bearer <token>'"));
         }
         List<AcademicActivity> upcoming = academicTaskServicePort.getUpcomingEvaluations(token, limit);
         return ResponseEntity.ok(ApiResponse.ok("Próximas evaluaciones ponderadas obtenidas", upcoming));
-    }
-
-    private String extractToken(String authHeader) {
-        if (authHeader != null && authHeader.startsWith("Bearer ")) {
-            return authHeader.substring(7).trim();
-        }
-        return authHeader;
     }
 }

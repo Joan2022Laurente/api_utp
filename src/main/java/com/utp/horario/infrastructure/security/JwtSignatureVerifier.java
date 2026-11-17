@@ -163,12 +163,16 @@ public class JwtSignatureVerifier implements TokenSignatureVerifierPort {
         try {
             Jws<Claims> jws = Jwts.parser()
                     .verifyWith(publicKey)
-                    .requireIssuer(properties.getIssuer())
                     .clockSkewSeconds(Math.max(0, properties.getClockSkewSeconds()))
                     .build()
                     .parseSignedClaims(token);
 
-            Map<String, Object> claims = jws.getPayload();
+            Claims claims = jws.getPayload();
+            String issuer = claims != null ? claims.getIssuer() : null;
+            if (!isValidIssuer(issuer)) {
+                return Outcome.invalid("Emisor no reconocido del token: " + issuer, kid, algorithm);
+            }
+
             return Outcome.ok(kid, algorithm, claims == null ? Map.of() : claims);
         } catch (JwtException e) {
             String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
@@ -176,6 +180,18 @@ public class JwtSignatureVerifier implements TokenSignatureVerifierPort {
         } catch (RuntimeException e) {
             return Outcome.invalid("No se pudo verificar el token: " + e.getClass().getSimpleName(), kid, algorithm);
         }
+    }
+
+    private boolean isValidIssuer(String issuer) {
+        if (issuer == null || issuer.isBlank()) {
+            return false;
+        }
+        String clean = issuer.trim();
+        if (properties.getIssuer() != null && properties.getIssuer().equalsIgnoreCase(clean)) {
+            return true;
+        }
+        return "https://auth.utp.edu.pe/realms/Xpedition".equalsIgnoreCase(clean)
+                || "https://sso.utp.edu.pe/auth/realms/Xpedition".equalsIgnoreCase(clean);
     }
 
     /**

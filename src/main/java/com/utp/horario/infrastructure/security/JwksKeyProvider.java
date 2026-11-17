@@ -97,7 +97,51 @@ public class JwksKeyProvider {
         // Se fuerza una recarga y se busca de nuevo una unica vez.
         log.info("[JWKS] La clave '{}' no esta en la cache; recargando el JWKS por rotacion de claves.", kid);
         Map<String, PublicKey> refreshed = refresh();
-        return refreshed.get(kid);
+        PublicKey refreshedKey = refreshed.get(kid);
+        if (refreshedKey != null) {
+            return refreshedKey;
+        }
+
+        return resolveFromAlternativeUtpRealm(kid);
+    }
+
+    private static final String AUTH_REALM_CERTS = "https://auth.utp.edu.pe/realms/Xpedition/protocol/openid-connect/certs";
+    private static final String SSO_REALM_CERTS = "https://sso.utp.edu.pe/auth/realms/Xpedition/protocol/openid-connect/certs";
+
+    private PublicKey resolveFromAlternativeUtpRealm(String kid) {
+        String currentUrl = properties.getJwksUrl();
+        if (currentUrl == null) {
+            return null;
+        }
+        String altUrl = null;
+        if (currentUrl.contains("auth.utp.edu.pe")) {
+            altUrl = SSO_REALM_CERTS;
+        } else if (currentUrl.contains("sso.utp.edu.pe")) {
+            altUrl = AUTH_REALM_CERTS;
+        }
+        if (altUrl == null) {
+            return null;
+        }
+        try {
+            log.info("[JWKS] Buscando clave '{}' en el realm institucional alternativo: {}", kid, altUrl);
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(altUrl))
+                    .timeout(Duration.ofSeconds(Math.max(1, properties.getJwksTimeoutSeconds())))
+                    .header("Accept", "application/json")
+                    .GET()
+                    .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() == 200) {
+                Map<String, PublicKey> altKeys = parseKeysNode(response.body());
+                if (altKeys.containsKey(kid)) {
+                    log.info("[JWKS] Clave '{}' resuelta exitosamente en el realm alternativo", kid);
+                    return altKeys.get(kid);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[JWKS] No se pudo consultar el realm alternativo {}: {}", altUrl, e.getMessage());
+        }
+        return null;
     }
 
     /**
@@ -161,7 +205,11 @@ public class JwksKeyProvider {
             throw new IOException("El JWKS respondio HTTP " + response.statusCode());
         }
 
-        JsonNode root = objectMapper.readTree(response.body());
+        return parseKeysNode(response.body());
+    }
+
+    private Map<String, PublicKey> parseKeysNode(String responseBody) throws IOException {
+        JsonNode root = objectMapper.readTree(responseBody);
         JsonNode keysNode = root.path("keys");
         if (!keysNode.isArray()) {
             throw new IOException("El JWKS no contiene un array 'keys'.");
