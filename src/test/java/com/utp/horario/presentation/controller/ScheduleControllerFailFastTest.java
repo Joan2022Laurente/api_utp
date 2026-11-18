@@ -104,7 +104,9 @@ class ScheduleControllerFailFastTest {
     @DisplayName("GET /schedule/export.ics sin token responde 401 Unauthorized y no devuelve ICS 200 vacío")
     void exportScheduleIcsWithoutTokenResponds401() throws Exception {
         mockMvc.perform(get("/schedule/export.ics"))
-                .andExpect(status().isUnauthorized());
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error").value("Se requiere token de sesión institucional UTP con formato 'Bearer <token>'"));
     }
 
     @Test

@@ -211,8 +211,8 @@ public class SyllabusServiceImpl implements SyllabusServicePort {
                                     officialVal.getViolations());
                         }
 
-                        log.warn("[SyllabusServiceImpl] Sílabo de {} se retorna en memoria sin persistir como oficial", courseCode);
-                        return parsed;
+                        throw new UpstreamServiceException(
+                                "El sílabo oficial no cumple con los estándares mínimos de estructura académica.");
                     }
 
                     // Regla de honestidad de datos: sin documento oficial no existe sílabo que
@@ -351,9 +351,9 @@ public class SyllabusServiceImpl implements SyllabusServicePort {
     }
 
     /**
-     * Repara un cronograma degradado para que el sílabo reconstruido pueda superar el
-     * Quality Gate: descarta las semanas sin tema valido y, si quedan menos de cuatro
-     * semanas (minimo exigido por el validador), completa con entradas genericas.
+     * Depura un cronograma degradado descartando las semanas sin tema valido, sin
+     * fabricar semanas sinteticas: si el documento oficial no contiene al menos cuatro
+     * semanas reales, el Quality Gate rechaza el sílabo y se reporta la inconsistencia.
      *
      * <p>Solo se aplica en el fallback oficial, nunca en el camino feliz.</p>
      */
@@ -373,16 +373,6 @@ public class SyllabusServiceImpl implements SyllabusServicePort {
                 }
                 repaired.add(session);
             }
-        }
-        int minimumWeeks = 4;
-        for (int week = repaired.size() + 1; repaired.size() < minimumWeeks; week++) {
-            repaired.add(SyllabusWeeklySession.builder()
-                    .week(week)
-                    .session(1)
-                    .unit("Unidad " + Math.min(4, Math.max(1, (int) Math.ceil(week / 4.0))))
-                    .topic("Contenido de la semana " + week)
-                    .activities("Desarrollo de competencias formativas y retroalimentación.")
-                    .build());
         }
         return repaired;
     }

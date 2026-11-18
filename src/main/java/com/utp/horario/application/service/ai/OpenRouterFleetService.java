@@ -111,6 +111,12 @@ public class OpenRouterFleetService {
         // Capping a 10,000 caracteres para evitar saturación de contexto en LLMs y llamadas pesadas
         String truncatedText = rawPdfText.length() > 10000 ? rawPdfText.substring(0, 10000) : rawPdfText;
 
+        // Presupuesto de tiempo DURO para la extraccion por IA.
+        // El router de Heroku corta la peticion a los 30 s y devuelve 503. El cronometro se
+        // inicia ANTES del descubrimiento de modelos para que su latencia de red tambien
+        // consuma el presupuesto y nunca lo desborde.
+        long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(AI_TOTAL_BUDGET_MILLIS);
+
         // 1. Obtener modelos rankeados dinámicamente según catálogo en vivo y scoring (máximo 3 según API OpenRouter)
         List<String> dynamicModels = modelSelector.getRankedFreeModels(3);
         String primaryModel = !dynamicModels.isEmpty() ? dynamicModels.get(0) : "cohere/north-mini-code:free";
@@ -118,12 +124,6 @@ public class OpenRouterFleetService {
         int totalKeys = properties.getKeys().size();
         int attempts = 0;
         int maxAttempts = Math.min(totalKeys, 3);
-
-        // Presupuesto de tiempo DURO para la extraccion por IA.
-        // El router de Heroku corta la peticion a los 30 s y devuelve 503; por tanto la IA
-        // nunca puede consumir mas de AI_TOTAL_BUDGET_MILLIS, dejando margen para la
-        // descarga del PDF y el parseo determinista de respaldo.
-        long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(AI_TOTAL_BUDGET_MILLIS);
 
         while (attempts < maxAttempts) {
             long remainingMillis = TimeUnit.NANOSECONDS.toMillis(deadlineNanos - System.nanoTime());
@@ -133,7 +133,8 @@ public class OpenRouterFleetService {
                 break;
             }
             attempts++;
-            int keyIdx = Math.abs(currentKeyIndex.get() % totalKeys);
+            // floorMod evita el desbordamiento de Math.abs(Integer.MIN_VALUE).
+            int keyIdx = Math.floorMod(currentKeyIndex.get(), totalKeys);
             String apiKey = properties.getKeys().get(keyIdx);
             String maskedKey = apiKey.length() > 14 ? apiKey.substring(0, 14) + "..." : "key-" + keyIdx;
 

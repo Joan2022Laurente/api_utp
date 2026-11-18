@@ -187,7 +187,7 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(ApiResponse.fail(
                         "Error interno del servidor",
-                        e.getClass().getSimpleName() + ": " + e.getMessage()));
+                        "Ha ocurrido un error interno no controlado. Reintente más tarde o contacte al administrador."));
     }
 
     private ResponseEntity<ApiResponse<Void>> badRequest(String error) {

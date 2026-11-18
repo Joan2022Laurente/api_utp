@@ -58,7 +58,7 @@ public class ScheduleController {
 
     @Operation(summary = "Exportar horario en formato estándar iCalendar (.ics)", description = "Genera un archivo RFC 5545 descargable compatible con Google Calendar, Apple Calendar y Microsoft Outlook con todas las sesiones de clases del periodo.")
     @GetMapping(value = "/export.ics", produces = "text/calendar; charset=utf-8")
-    public ResponseEntity<String> exportScheduleIcs(
+    public ResponseEntity<Object> exportScheduleIcs(
             @org.springframework.web.bind.annotation.RequestHeader(value = "Authorization", required = false) String authHeader,
             @RequestParam(defaultValue = "current-student") String studentId,
             @RequestParam(defaultValue = "2026 - Ciclo 2 Agosto") String period) {
@@ -66,7 +66,7 @@ public class ScheduleController {
         if (token == null) {
             return ResponseEntity.status(401)
                     .contentType(MediaType.APPLICATION_JSON)
-                    .body("{\"success\":false,\"error\":\"Se requiere token de sesión institucional UTP con formato 'Bearer <token>'\"}");
+                    .body(ApiResponse.fail("Se requiere token de sesión institucional UTP con formato 'Bearer <token>'"));
         }
         String icsContent = scheduleServicePort.exportScheduleToIcs(studentId, period, token);
         return ResponseEntity.ok()

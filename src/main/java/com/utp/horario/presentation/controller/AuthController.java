@@ -1,5 +1,6 @@
 package com.utp.horario.presentation.controller;
 
+import com.utp.horario.domain.exception.AuthenticationException;
 import com.utp.horario.domain.model.StudentProfile;
 import com.utp.horario.domain.port.in.AuthenticateStudentUseCase;
 import com.utp.horario.presentation.dto.ApiResponse;
@@ -59,7 +60,7 @@ public class AuthController {
             @Parameter(hidden = true)
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-            throw new IllegalArgumentException("Cabecera 'Authorization: Bearer <token>' requerida.");
+            throw new AuthenticationException("Cabecera 'Authorization: Bearer <token>' requerida.");
         }
         String token = authHeader.substring(7).trim();
         StudentProfile profile = authenticateStudentUseCase.authenticateWithToken(token);
@@ -74,7 +75,7 @@ public class AuthController {
             @Parameter(hidden = true)
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-            throw new IllegalArgumentException("Cabecera 'Authorization: Bearer <token>' requerida.");
+            throw new AuthenticationException("Cabecera 'Authorization: Bearer <token>' requerida.");
         }
         String token = authHeader.substring(7).trim();
         StudentProfile caller = authenticateStudentUseCase.authenticateWithToken(token);

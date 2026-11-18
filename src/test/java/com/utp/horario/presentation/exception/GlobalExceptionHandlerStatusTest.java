@@ -152,7 +152,9 @@ class GlobalExceptionHandlerStatusTest {
         mockMvc.perform(get("/test/boom"))
                 .andExpect(status().isInternalServerError())
                 .andExpect(jsonPath("$.success").value(false))
-                .andExpect(jsonPath("$.message").value("Error interno del servidor"));
+                .andExpect(jsonPath("$.message").value("Error interno del servidor"))
+                .andExpect(jsonPath("$.error").value("Ha ocurrido un error interno no controlado. Reintente más tarde o contacte al administrador."))
+                .andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("RuntimeException"))));
     }
 
     @Test

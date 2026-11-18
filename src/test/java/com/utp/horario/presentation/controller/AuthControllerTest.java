@@ -147,9 +147,9 @@ class AuthControllerTest {
     }
 
     @Test
-    void me_withoutBearerHeader_returns400() throws Exception {
+    void me_withoutBearerHeader_returns401() throws Exception {
         mockMvc.perform(get("/auth/me"))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.error").value("Cabecera 'Authorization: Bearer <token>' requerida."));
     }

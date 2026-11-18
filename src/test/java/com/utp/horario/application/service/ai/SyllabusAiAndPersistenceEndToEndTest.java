@@ -151,31 +151,41 @@ class SyllabusAiAndPersistenceEndToEndTest {
                         && com.utp.horario.support.ExternalServices.isOpenRouterReachable(),
                 "Dependencias externas (Supabase/OpenRouter) no alcanzables: se omite la prueba de integración en red.");
 
-        String testCourseCode = "100000TEST_ROBOTICS";
+        String testCourseCode = "100000RB01";
         String samplePdfText = """
-                1. INFORMACIÓN GENERAL
-                Curso: ROBÓTICA INDUSTRIAL
-                Código: 100000TEST_ROBOTICS
-                Créditos: 4
-                Modalidad: Presencial
-                Horas: 4
-                Carrera: Ingeniería Mecatrónica
+                SÍLABO
+                ROBÓTICA INDUSTRIAL (100000RB01)
+                2026 - Ciclo 2 Agosto
 
-                2. LOGRO DEL CURSO
+                1. INFORMACIÓN GENERAL
+                1.1. Carrera:
+                Ingeniería Mecatrónica
+                1.2. Créditos: 4
+                1.3. Enseñanza de curso: Presencial
+                1.4. Horas semanales: 4
+
+                4. LOGRO GENERAL DE APRENDIZAJE
                 Al finalizar el curso, el estudiante programa brazos robóticos para manufactura avanzada.
 
-                3. SISTEMA DE EVALUACIÓN
-                Fórmula: (30%)PC1 + (30%)PC2 + (40%)PROY
-                Evaluaciones:
-                PC1: Práctica Calificada 1, Semana 5, Individual, 30%
-                PC2: Práctica Calificada 2, Semana 11, Individual, 30%
-                PROY: Proyecto Robótico, Semana 18, Grupal, 40%
+                7. SISTEMA DE EVALUACIÓN
+                El cálculo del promedio final considera la siguiente fórmula:
+                (30%)PC1 + (30%)PC2 + (40%)PROY
 
-                4. CRONOGRAMA DE ACTIVIDADES
-                Semana 1: Cinemática directa de manipuladores. Actividades: Análisis matricial.
-                Semana 5: Evaluación PC1. Actividades: Cinemática inversa y trayectorias.
-                Semana 11: Evaluación PC2. Actividades: Control de servomotores y dinámica.
-                Semana 18: Sustentación PROY. Actividades: Demostración con robot físico.
+                Donde:
+                Tipo Descripción Semana Observación
+                PC1 PRÁCTICA CALIFICADA 1 5 Individual
+                PC2 PRÁCTICA CALIFICADA 2 11 Individual
+                PROY PROYECTO ROBÓTICO 18 Grupal
+
+                8. CRONOGRAMA DE ACTIVIDADES
+                Semana 1
+                Temario: Cinemática directa de manipuladores y análisis matricial
+                Semana 5
+                Temario: Evaluación PC1, cinemática inversa y trayectorias
+                Semana 11
+                Temario: Evaluación PC2, control de servomotores y dinámica
+                Semana 18
+                Temario: Sustentación del proyecto robótico con demostración
                 """;
 
         // Simular que el portal UTP descarga este texto para el nuevo curso

@@ -77,8 +77,8 @@ public class SyllabusParserEngine {
         String cleanText = rawText.replace("\r\n", "\n");
 
         // 1. Extraer Código y Nombre
-        String courseName = "CURSO UNIVERSITARIO UTP";
-        String courseCode = (fallbackCourseCode != null && !fallbackCourseCode.isBlank()) ? fallbackCourseCode : "100000";
+        String courseName = "";
+        String courseCode = (fallbackCourseCode != null && !fallbackCourseCode.isBlank()) ? fallbackCourseCode : "";
 
         Pattern titlePattern = Pattern.compile("(?:#\\s*)?SÍLABO\\s*\\n?\\s*([^(]+?)\\s*\\(([A-Z0-9_]{6,12})\\)", Pattern.CASE_INSENSITIVE);
         Matcher titleMatcher = titlePattern.matcher(cleanText);
@@ -133,12 +133,10 @@ public class SyllabusParserEngine {
                     .filter(c -> c.length() > 2)
                     .collect(Collectors.toList());
         }
-        if (careers.isEmpty()) {
-            careers = List.of("Ingeniería de Sistemas e Informática", "Ingeniería de Software");
-        }
+        // No se inventa un catálogo de carreras: si el PDF no lo declara, se deja vacío.
 
         // 4. Logro General de Aprendizaje
-        String learningGoal = "Desarrollo de competencias profesionales y aplicación práctica en el área curricular del curso.";
+        String learningGoal = "";
         Pattern goalPattern = Pattern.compile("(?:##\\s*)?4\\.\\s*LOGRO GENERAL DE APRENDIZAJE\\s*([\\s\\S]*?)(?=(?:##\\s*)?[5-9]\\.|\\n\\s*[5-9]\\.|$)", Pattern.CASE_INSENSITIVE);
         Matcher goalMatcher = goalPattern.matcher(cleanText);
         if (goalMatcher.find()) {
@@ -166,11 +164,8 @@ public class SyllabusParserEngine {
             weeklySchedule = SyllabusScheduleFsm.buildWeeklySchedule(cleanText, evaluations);
         }
 
-        List<String> rules = List.of(
-                "La nota mínima aprobatoria final es de 12.",
-                "En este curso, no aplica examen rezagado.",
-                "El porcentaje de similitud aceptable en software antiplagio no debe exceder el 20%."
-        );
+        // No se injectan reglas academicas que el documento oficial no declare.
+        List<String> rules = List.of();
 
         return Syllabus.builder()
                 .id(courseCode)

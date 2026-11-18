@@ -1176,7 +1176,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                                     if (!coursesMap.containsKey(cleanCourseName)) {
                                         coursesMap.put(cleanCourseName, Course.builder()
                                                 .id("c-" + cleanCourseName.toLowerCase().replaceAll("[^a-z0-9]", "-"))
-                                                .code("100000" + cleanCourseName.substring(0, Math.min(4, cleanCourseName.length())))
+                                                .code("")
                                                 .name(cleanCourseName)
                                                 .section(sectionCode)
                                                 .credits(3)
@@ -1485,7 +1485,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                         .section(parsed.sectionCode.isBlank() ? sectionId : parsed.sectionCode)
                         .classroom(loc.aula)
                         .building(loc.pabellon)
-                        .floor(String.valueOf((Math.abs(parsed.cleanTitle.hashCode()) % 6) + 2))
+                        .floor("")
                         .environmentType(modality.equals("P") ? "AULA TEÓRICA" : "AULA VIRTUAL")
                         .teacher("")
                         .modality(modality)
@@ -1498,7 +1498,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                     seenCourseIds.add(parsed.cleanTitle);
                     courses.add(Course.builder()
                             .id("c-" + parsed.cleanTitle.toLowerCase().replaceAll("[^a-z0-9]", "-"))
-                            .code(courseId.isBlank() ? "100000" + parsed.cleanTitle.substring(0, Math.min(4, parsed.cleanTitle.length())) : courseId)
+                            .code(courseId)
                             .name(parsed.cleanTitle)
                             .section(parsed.sectionCode.isBlank() ? sectionId : parsed.sectionCode)
                             .credits(3)

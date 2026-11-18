@@ -53,16 +53,22 @@ public class LoginRateLimiter {
         long now = System.currentTimeMillis();
         Deque<Long> attemptWindow = attempts.computeIfAbsent(clientKey, k -> new ConcurrentLinkedDeque<>());
         Deque<Long> failureWindow = failures.computeIfAbsent(clientKey, k -> new ConcurrentLinkedDeque<>());
-        prune(attemptWindow, now);
-        prune(failureWindow, now);
 
-        if (failureWindow.size() >= properties.getMaxFailuresPerWindow()) {
-            return Decision.BLOCKED_BY_FAILURES;
+        // Seccion critica por cliente: poda, comprobacion de limites y registro deben ser
+        // atomicos para cerrar la condicion de carrera (TOCTOU) ante rafagas concurrentes
+        // que, de otro modo, podrian rebasar el limite de intentos.
+        synchronized (attemptWindow) {
+            prune(attemptWindow, now);
+            prune(failureWindow, now);
+
+            if (failureWindow.size() >= properties.getMaxFailuresPerWindow()) {
+                return Decision.BLOCKED_BY_FAILURES;
+            }
+            if (attemptWindow.size() >= properties.getMaxRequestsPerWindow()) {
+                return Decision.BLOCKED_BY_RATE;
+            }
+            attemptWindow.addLast(now);
         }
-        if (attemptWindow.size() >= properties.getMaxRequestsPerWindow()) {
-            return Decision.BLOCKED_BY_RATE;
-        }
-        attemptWindow.addLast(now);
         return Decision.ALLOWED;
     }
 
@@ -75,8 +81,10 @@ public class LoginRateLimiter {
         }
         long now = System.currentTimeMillis();
         Deque<Long> failureWindow = failures.computeIfAbsent(clientKey, k -> new ConcurrentLinkedDeque<>());
-        prune(failureWindow, now);
-        failureWindow.addLast(now);
+        synchronized (failureWindow) {
+            prune(failureWindow, now);
+            failureWindow.addLast(now);
+        }
     }
 
     /**

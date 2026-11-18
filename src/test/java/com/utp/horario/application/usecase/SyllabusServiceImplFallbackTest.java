@@ -5,6 +5,7 @@ import com.utp.horario.application.service.ai.OpenRouterFleetService;
 import com.utp.horario.application.service.ai.SyllabusPdfToMarkdownSanitizer;
 import com.utp.horario.application.service.export.SyllabusMarkdownExporter;
 import com.utp.horario.application.service.validation.SyllabusDeterministicValidator;
+import com.utp.horario.domain.exception.UpstreamServiceException;
 import com.utp.horario.domain.model.CourseSummaryData;
 import com.utp.horario.domain.model.Syllabus;
 import com.utp.horario.domain.model.SyllabusEvaluation;
@@ -22,6 +23,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
@@ -127,10 +129,10 @@ class SyllabusServiceImplFallbackTest {
                 .evaluations(List.of(SyllabusEvaluation.builder().id("PC1").type("PC1")
                         .description("Practica 1").week(4).weightPercent(70).build()))
                 .weeklySchedule(List.of(
-                        SyllabusWeeklySession.builder().week(1).unit("U1").topic("T1").build(),
-                        SyllabusWeeklySession.builder().week(2).unit("U1").topic("T2").build(),
-                        SyllabusWeeklySession.builder().week(3).unit("U1").topic("T3").build(),
-                        SyllabusWeeklySession.builder().week(4).unit("U1").topic("T4").build()))
+                        SyllabusWeeklySession.builder().week(1).unit("U1").topic("Tema 1").build(),
+                        SyllabusWeeklySession.builder().week(2).unit("U1").topic("Tema 2").build(),
+                        SyllabusWeeklySession.builder().week(3).unit("U1").topic("Tema 3").build(),
+                        SyllabusWeeklySession.builder().week(4).unit("U1").topic("Tema 4").build()))
                 .build();
         when(parserEngine.parse(anyString(), anyString())).thenReturn(invalid);
 
@@ -162,8 +164,8 @@ class SyllabusServiceImplFallbackTest {
     }
 
     @Test
-    @DisplayName("Si el Portal no esta disponible, se conserva el resultado determinista sin fallar")
-    void portalUnavailableKeepsDeterministicResult() {
+    @DisplayName("Si el Portal no esta disponible y el determinista no es valido, se responde 502 sin devolver datos no verificados")
+    void portalUnavailableDoesNotReturnUnverifiedResult() {
         when(fleet.parseSyllabusWithAi(anyString(), anyString())).thenReturn(Optional.empty());
 
         Syllabus invalid = Syllabus.builder()
@@ -180,14 +182,15 @@ class SyllabusServiceImplFallbackTest {
         when(parserEngine.parse(anyString(), anyString())).thenReturn(invalid);
         when(gateway.fetchCourseSummary(anyString(), anyString())).thenThrow(new RuntimeException("Portal no disponible"));
 
-        Syllabus result = service.getSyllabus(COURSE, null, null, TOKEN);
-
-        assertNotNull(result, "Nunca debe propagating una excepcion por un fallback opcional");
-        assertEquals("CURSO DEGRADADO", result.getCourseName());
+        UpstreamServiceException ex = assertThrows(UpstreamServiceException.class,
+                () -> service.getSyllabus(COURSE, null, null, TOKEN));
+        assertEquals("El sílabo oficial no cumple con los estándares mínimos de estructura académica.",
+                ex.getMessage());
+        verify(repository, never()).save(any(Syllabus.class));
     }
 
     @Test
-    @DisplayName("Sin token no se consulta el Portal (fallback oficial indisponible)")
+    @DisplayName("Sin token no se consulta el Portal y tampoco se devuelve un sílabo no validado")
     void officialFallbackRequiresToken() {
         when(fleet.parseSyllabusWithAi(anyString(), anyString())).thenReturn(Optional.empty());
         Syllabus invalid = Syllabus.builder()
@@ -198,11 +201,45 @@ class SyllabusServiceImplFallbackTest {
                 .build();
         when(parserEngine.parse(anyString(), anyString())).thenReturn(invalid);
 
-        Syllabus result = service.getSyllabus(COURSE, null, null, null);
-
-        assertNotNull(result);
+        UpstreamServiceException ex = assertThrows(UpstreamServiceException.class,
+                () -> service.getSyllabus(COURSE, null, null, null));
+        assertEquals("El sílabo oficial no cumple con los estándares mínimos de estructura académica.",
+                ex.getMessage());
         verify(gateway, never()).fetchCourseSummary(anyString(), anyString());
-        assertEquals("(70%)PC1", result.getFormula(), "Sin token no se sustituye el resultado determinista");
-        assertEquals(0, result.getEvaluations().size());
+    }
+
+    @Test
+    @DisplayName("El fallback oficial NO inventa semanas: un cronograma con menos de 4 semanas reales se rechaza")
+    void officialFallbackDoesNotInventWeeks() {
+        when(fleet.parseSyllabusWithAi(anyString(), anyString())).thenReturn(Optional.empty());
+
+        Syllabus shortSchedule = Syllabus.builder()
+                .id(COURSE).courseCode(COURSE).courseName("CURSO CORTO")
+                .formula("(50%)PC1 + (50%)PROY")
+                .evaluations(List.of(
+                        SyllabusEvaluation.builder().id("PC1").type("PC1").description("Practica 1")
+                                .week(2).weightPercent(50).build(),
+                        SyllabusEvaluation.builder().id("PROY").type("PROY").description("Proyecto")
+                                .week(3).weightPercent(50).build()))
+                .weeklySchedule(List.of(
+                        SyllabusWeeklySession.builder().week(1).unit("U1").topic("Tema 1").build(),
+                        SyllabusWeeklySession.builder().week(2).unit("U1").topic("Tema 2").build()))
+                .build();
+        when(parserEngine.parse(anyString(), anyString())).thenReturn(shortSchedule);
+
+        CourseSummaryData summary = CourseSummaryData.builder()
+                .periodId("2263")
+                .courses(List.of(CourseSummaryData.CourseGradeItem.builder()
+                        .courseCode(COURSE)
+                        .formula("50%*[PC1] + 50%*[PROY]")
+                        .evaluations(List.of(
+                                CourseSummaryData.EvaluationGrade.builder().shortName("PC1").name("Practica 1").build(),
+                                CourseSummaryData.EvaluationGrade.builder().shortName("PROY").name("Proyecto").build()))
+                        .build()))
+                .build();
+        when(gateway.fetchCourseSummary(anyString(), anyString())).thenReturn(summary);
+
+        assertThrows(UpstreamServiceException.class,
+                () -> service.getSyllabus(COURSE, null, null, TOKEN));
     }
 }
