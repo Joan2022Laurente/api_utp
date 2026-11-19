@@ -8,6 +8,9 @@ import java.util.List;
 
 public interface AcademicTaskServicePort {
     TaskSpecification getTaskDetail(String sectionId, String activityId, String token);
+
+    com.fasterxml.jackson.databind.JsonNode getSectionFull(String sectionId, String token);
+
     List<AcademicActivity> getCalendarActivities(String dateToQuery, String intervalMode, String token);
     List<AcademicActivity> getCalendarActivitiesFiltered(String dateToQuery, String intervalMode, String token, Integer week, String status, Boolean onlyGraded, String type);
     List<AcademicActivity> getUpcomingEvaluations(String token, int limit);

@@ -54,6 +54,11 @@ public class AcademicTaskService implements AcademicTaskServicePort {
     }
 
     @Override
+    public com.fasterxml.jackson.databind.JsonNode getSectionFull(String sectionId, String token) {
+        return utpPortalGatewayPort.fetchSectionFull(sectionId, token);
+    }
+
+    @Override
     public List<AcademicActivity> getCalendarActivities(String dateToQuery, String intervalMode, String token) {
         return getCalendarActivitiesFiltered(dateToQuery, intervalMode, token, null, null, null, null);
     }

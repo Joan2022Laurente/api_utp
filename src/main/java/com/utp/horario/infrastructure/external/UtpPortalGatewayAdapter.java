@@ -21,6 +21,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -1843,6 +1844,68 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 .replaceAll("[ÚÙÜÛ]", "U")
                 .replaceAll("[^A-Z0-9]", "")
                 .trim();
+    }
+
+    @Override
+    public JsonNode fetchSectionFull(String sectionId, String token) {
+        if (sectionId == null || sectionId.isBlank()) {
+            throw new IllegalArgumentException("Se requiere sectionId para consultar el árbol de la sección.");
+        }
+        String effectiveToken = (token != null && token.startsWith("Bearer ")) ? token.substring(7).trim() : token;
+        if (effectiveToken == null || effectiveToken.isBlank()) {
+            throw new AuthenticationException("Se requiere token de sesión institucional UTP para consultar la sección.");
+        }
+        String userId = extractUserIdFromToken(effectiveToken);
+        String tenantId = extractTenantIdFromToken(effectiveToken);
+        String url = getPaoEndpoint("/course/student/sections/"
+                + URLEncoder.encode(sectionId.trim(), StandardCharsets.UTF_8) + "/full");
+        log.info("[UtpPortalGatewayAdapter] Consultando árbol completo de la sección en: {}", url);
+
+        try {
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(15))
+                    .header("Accept", "application/json, */*")
+                    .header("Authorization", "Bearer " + effectiveToken)
+                    .header("user-id", userId)
+                    .header("user-role", "STUDENT")
+                    .header("x-tenant-id", tenantId)
+                    .header("transaction-id", java.util.UUID.randomUUID().toString())
+                    .header("origin", "https://class.utp.edu.pe")
+                    .header("referer", "https://class.utp.edu.pe/")
+                    .header("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                    .GET()
+                    .build();
+
+            HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+            int status = resp.statusCode();
+            if (status == 200) {
+                JsonNode root = objectMapper.readTree(resp.body());
+                if (root == null || root.isNull()) {
+                    throw new UpstreamServiceException("UTP PAO devolvió un cuerpo vacío al consultar la sección " + sectionId + ".");
+                }
+                if (root.has("errors")) {
+                    throw new UpstreamServiceException("UTP PAO devolvió errores al consultar la sección " + sectionId + ".");
+                }
+                return root.hasNonNull("data") ? root.get("data") : root;
+            }
+            if (status == 401 || status == 403) {
+                throw new AuthenticationException("Token institucional UTP inválido o expirado para consultar sección " + sectionId);
+            }
+            if (status == 404) {
+                throw new ResourceNotFoundException("Sección académica " + sectionId + " no encontrada en UTP+ Class.");
+            }
+            throw new UpstreamServiceException("UTP PAO respondió con código " + status + " al consultar sección " + sectionId);
+        } catch (AuthenticationException | ResourceNotFoundException | UpstreamServiceException e) {
+            throw e;
+        } catch (IOException e) {
+            throw new UpstreamServiceException("Error de red al consultar la sección " + sectionId + ": " + e.getMessage(), e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new UpstreamServiceException("Llamada interrumpida al consultar la sección " + sectionId + ".", e);
+        } catch (Exception e) {
+            throw new UpstreamServiceException("Error al procesar el árbol de la sección " + sectionId + ": " + e.getMessage(), e);
+        }
     }
 
     @Override

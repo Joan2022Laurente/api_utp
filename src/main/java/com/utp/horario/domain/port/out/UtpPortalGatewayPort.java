@@ -14,6 +14,13 @@ public interface UtpPortalGatewayPort {
     ScheduleInterval fetchSchedule(String token, String period);
     String fetchSyllabusPdfText(String token, String courseCode);
     TaskSpecification fetchTaskSpecification(String sectionId, String activityId, String token);
+
+    /**
+     * Árbol canónico de contenidos de una sección (unities -> themes -> contents) en UTP+ Class.
+     * Fail-fast: nunca devuelve un árbol simulado ni una versión recortada del calendario.
+     */
+    com.fasterxml.jackson.databind.JsonNode fetchSectionFull(String sectionId, String token);
+
     List<AcademicActivity> fetchCalendarActivities(String dateToQuery, String intervalMode, String token);
     CourseSummaryData fetchCourseSummary(String periodId, String token);
 
