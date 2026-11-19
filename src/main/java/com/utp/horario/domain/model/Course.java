@@ -20,6 +20,8 @@ public class Course {
     private String section;
     /** UUID de la sección en Canvas PAO. */
     private String sectionId;
+    /** Enlace al aula virtual Canvas, preservado aunque el curso no tenga sesiones. */
+    private String classLink;
     private ModalityType modalityType;
     private Integer credits;
     private String teacher;

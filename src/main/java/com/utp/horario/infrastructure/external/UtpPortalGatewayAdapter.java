@@ -1180,37 +1180,13 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                                         bldgDesc = !bldgId.isBlank() ? bldgId : "Pabellón UTP";
                                     }
 
-                                    LocalDateTime startAt = LocalDateTime.ofInstant(Instant.ofEpochMilli(startEpoch), ZoneId.of("America/Lima"));
-                                    LocalDateTime finishAt = LocalDateTime.ofInstant(Instant.ofEpochMilli(endEpoch), ZoneId.of("America/Lima"));
-
-                                    // La modalidad VT es asíncrona: no emite franja fija para no generar
-                                    // cruces falsos con clases sincrónicas en el Read Model del backend.
+                                    // Un curso VT es asíncrono: se registra en 'courses' con todos sus
+                                    // metadatos, pero NUNCA se emite como sesión de calendario. Así se
+                                    // erradica el ×17 generado por el barrido de 18 semanas.
                                     ModalityType sessionModality = officialRef != null
                                             && officialRef.modality() != ModalityType.UNKNOWN
                                             ? officialRef.modality() : ModalityType.from(instructionMode);
                                     boolean asyncVirtual = sessionModality.isAsyncVirtual();
-                                    String environment = asyncVirtual ? "TUTORÍA VIRTUAL 24/7" : descAmb;
-
-                                    ClassSession session = ClassSession.builder()
-                                            .id(classId.isBlank() ? "gql-" + startEpoch : classId)
-                                            .courseCode(officialCode)
-                                            .courseName(cleanCourseName)
-                                            .section(officialSection)
-                                            .sectionId(sectionUuid.isBlank() ? null : sectionUuid)
-                                            .modalityType(sessionModality)
-                                            .classroom(roomId.isBlank() ? "Aula General" : roomId)
-                                            .building(bldgDesc)
-                                            .floor(floor)
-                                            .environmentType(environment)
-                                            .teacher(teacher)
-                                            .modality(asyncVirtual ? "VT" : instructionMode)
-                                            .startAt(asyncVirtual ? null : startAt)
-                                            .finishAt(asyncVirtual ? null : finishAt)
-                                            .zoomLink(linkZoom)
-                                            .classLink(linkCourseClass)
-                                            .build();
-
-                                    allClasses.add(session);
 
                                     if (!coursesMap.containsKey(cleanCourseName)) {
                                         coursesMap.put(cleanCourseName, Course.builder()
@@ -1220,6 +1196,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                                                 .section(officialSection)
                                                 .sectionId(sectionUuid.isBlank() ? null : sectionUuid)
                                                 .modalityType(sessionModality)
+                                                .classLink(linkCourseClass)
                                                 .credits(3)
                                                 .teacher(teacher)
                                                 .modality(asyncVirtual ? "Virtual 24/7"
@@ -1231,7 +1208,8 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                                         boolean needsTeacher = (existing.getTeacher() == null || existing.getTeacher().isBlank()) && !teacher.isBlank();
                                         boolean needsCode = existing.getCode() == null && officialCode != null;
                                         boolean needsSection = (existing.getSection() == null || existing.getSection().isBlank()) && !officialSection.isBlank();
-                                        if (needsTeacher || needsCode || needsSection) {
+                                        boolean needsClassLink = existing.getClassLink() == null && linkCourseClass != null;
+                                        if (needsTeacher || needsCode || needsSection || needsClassLink) {
                                             coursesMap.put(cleanCourseName, Course.builder()
                                                     .id(existing.getId())
                                                     .code(needsCode ? officialCode : existing.getCode())
@@ -1240,6 +1218,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                                                     .sectionId(existing.getSectionId() != null ? existing.getSectionId()
                                                             : (sectionUuid.isBlank() ? null : sectionUuid))
                                                     .modalityType(sessionModality)
+                                                    .classLink(needsClassLink ? linkCourseClass : existing.getClassLink())
                                                     .credits(existing.getCredits())
                                                     .teacher(needsTeacher ? teacher : existing.getTeacher())
                                                     .modality(existing.getModality())
@@ -1247,6 +1226,34 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                                                     .build());
                                         }
                                     }
+
+                                    if (asyncVirtual) {
+                                        continue;
+                                    }
+
+                                    LocalDateTime startAt = LocalDateTime.ofInstant(Instant.ofEpochMilli(startEpoch), ZoneId.of("America/Lima"));
+                                    LocalDateTime finishAt = LocalDateTime.ofInstant(Instant.ofEpochMilli(endEpoch), ZoneId.of("America/Lima"));
+
+                                    ClassSession session = ClassSession.builder()
+                                            .id(classId.isBlank() ? "gql-" + startEpoch : classId)
+                                            .courseCode(officialCode)
+                                            .courseName(cleanCourseName)
+                                            .section(officialSection)
+                                            .sectionId(sectionUuid.isBlank() ? null : sectionUuid)
+                                            .modalityType(sessionModality)
+                                            .classroom(roomId.isBlank() ? "Aula General" : roomId)
+                                            .building(bldgDesc)
+                                            .floor(floor)
+                                            .environmentType(descAmb)
+                                            .teacher(teacher)
+                                            .modality(instructionMode)
+                                            .startAt(startAt)
+                                            .finishAt(finishAt)
+                                            .zoomLink(linkZoom)
+                                            .classLink(linkCourseClass)
+                                            .build();
+
+                                    allClasses.add(session);
                                 }
                             }
                         }
@@ -1513,6 +1520,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 String courseId = ev.path("metadata").path("courseId").asText("");
                 String sectionId = ev.path("metadata").path("sectionId").asText("");
                 String syllabusUrl = ev.path("metadata").path("syllabusUrl").asText("");
+                String courseClassLink = ev.path("metadata").path("classLink").asText(null);
 
                 ParsedTitle parsed = parseTitle(rawTitle);
                 ClassroomLocation loc = getClassroomLocation(parsed.cleanTitle, parsed.sectionCode);
@@ -1536,6 +1544,29 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 registerCourseRef(studentCode, rawTitle, officialSection, courseUuid, sectionUuid, syllabusUrl);
                 if (!courseId.isBlank()) registerCourseRef(studentCode, courseId, officialSection, courseUuid, sectionUuid, syllabusUrl);
 
+                // El curso se registra SIEMPRE en 'courses', también si es VT asíncrono.
+                if (!seenCourseIds.contains(parsed.cleanTitle)) {
+                    seenCourseIds.add(parsed.cleanTitle);
+                    courses.add(Course.builder()
+                            .id("c-" + parsed.cleanTitle.toLowerCase().replaceAll("[^a-z0-9]", "-"))
+                            .code(officialCode)
+                            .name(parsed.cleanTitle)
+                            .section(officialSection)
+                            .sectionId(sectionUuid.isBlank() ? null : sectionUuid)
+                            .classLink(courseClassLink)
+                            .modalityType(sessionModality)
+                            .credits(3)
+                            .modality(asyncVirtual ? "Virtual 24/7"
+                                    : (modality.equals("P") ? "Presencial" : "Remoto Zoom"))
+                            .weeklyHours(4)
+                            .build());
+                }
+
+                // Ninguna sesión para cursos VT: el array 'classes' queda vacío para ellos.
+                if (asyncVirtual) {
+                    continue;
+                }
+
                 // Parsing defensivo de marcas de tiempo: un formato inesperado del proveedor
                 // no debe abortar la sincronización completa del horario.
                 LocalDateTime startAt = parseLocalDateTimeSafe(startAtStr);
@@ -1551,30 +1582,13 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                         .classroom(loc.aula)
                         .building(loc.pabellon)
                         .floor("")
-                        .environmentType(asyncVirtual ? "TUTORÍA VIRTUAL 24/7"
-                                : (modality.equals("P") ? "AULA TEÓRICA" : "AULA VIRTUAL"))
+                        .environmentType(modality.equals("P") ? "AULA TEÓRICA" : "AULA VIRTUAL")
                         .teacher("")
-                        .modality(asyncVirtual ? "VT" : modality)
-                        .startAt(asyncVirtual ? null : startAt)
-                        .finishAt(asyncVirtual ? null : finishAt)
+                        .modality(modality)
+                        .startAt(startAt)
+                        .finishAt(finishAt)
                         .zoomLink(zoomLink)
                         .build());
-
-                if (!seenCourseIds.contains(parsed.cleanTitle)) {
-                    seenCourseIds.add(parsed.cleanTitle);
-                    courses.add(Course.builder()
-                            .id("c-" + parsed.cleanTitle.toLowerCase().replaceAll("[^a-z0-9]", "-"))
-                            .code(officialCode)
-                            .name(parsed.cleanTitle)
-                            .section(officialSection)
-                            .sectionId(sectionUuid.isBlank() ? null : sectionUuid)
-                            .modalityType(sessionModality)
-                            .credits(3)
-                            .modality(asyncVirtual ? "Virtual 24/7"
-                                    : (modality.equals("P") ? "Presencial" : "Remoto Zoom"))
-                            .weeklyHours(4)
-                            .build());
-                }
             }
         }
 

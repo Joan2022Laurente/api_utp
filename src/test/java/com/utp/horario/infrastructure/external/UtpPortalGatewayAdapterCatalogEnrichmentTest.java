@@ -80,15 +80,20 @@ class UtpPortalGatewayAdapterCatalogEnrichmentTest {
 
         assertNotNull(interval.getClasses());
 
-        ClassSession async = interval.getClasses().stream()
-                .filter(c -> "100000S72V".equals(c.getCourseCode())).findFirst().orElseThrow();
-        assertEquals("54262", async.getSection());
-        assertEquals(ASYNC_SECTION, async.getSectionId());
-        assertEquals(ModalityType.ASYNC_VIRTUAL, async.getModalityType());
-        assertTrue(async.isAsyncVirtual());
-        assertNull(async.getStartAt(), "VT no debe emitir franja fija que genere cruces falsos");
-        assertNull(async.getFinishAt());
-        assertEquals("TUTORÍA VIRTUAL 24/7", async.getEnvironmentType());
+        assertTrue(interval.getClasses().stream()
+                        .noneMatch(c -> c.isAsyncVirtual() || "VT".equals(c.getModality())),
+                "classes no debe contener ninguna sesión para cursos VT");
+        assertTrue(interval.getCourses().stream()
+                        .anyMatch(c -> c.isAsyncVirtual() && "100000S72V".equals(c.getCode())),
+                "courses debe incluir la asignatura VT enriquecida");
+
+        com.utp.horario.domain.model.Course vtCourse = interval.getCourses().stream()
+                .filter(c -> "100000S72V".equals(c.getCode())).findFirst().orElseThrow();
+        assertEquals("54262", vtCourse.getSection());
+        assertEquals(ASYNC_SECTION, vtCourse.getSectionId());
+        assertEquals(ModalityType.ASYNC_VIRTUAL, vtCourse.getModalityType());
+        assertTrue(vtCourse.isAsyncVirtual());
+        assertNotNull(vtCourse.getClassLink(), "El enlace Canvas debe conservarse aunque no haya sesiones");
 
         ClassSession live = interval.getClasses().stream()
                 .filter(c -> "100000S74T".equals(c.getCourseCode())).findFirst().orElseThrow();
