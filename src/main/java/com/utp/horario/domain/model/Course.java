@@ -13,12 +13,25 @@ import java.util.List;
 @AllArgsConstructor
 public class Course {
     private String id;
+    /** Código de catálogo (100000...). Nunca el nombre; nullable si la fuente no lo provee. */
     private String code;
     private String name;
+    /** Número de sección institucional (classNumber). */
     private String section;
+    /** UUID de la sección en Canvas PAO. */
+    private String sectionId;
+    private ModalityType modalityType;
     private Integer credits;
     private String teacher;
     private String modality;
     private Integer weeklyHours;
     private List<ClassSession> sessions;
+
+    public boolean isAsyncVirtual() {
+        return modalityType != null && modalityType.isAsyncVirtual();
+    }
+
+    public boolean isLiveSynchronous() {
+        return modalityType != null && modalityType.isLiveSynchronous();
+    }
 }

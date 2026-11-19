@@ -179,6 +179,9 @@ class UtpPortalGatewayAdapterUpstreamErrorTest {
     void scheduleWithGenuineEmptyResponseReturnsEmptyInterval() {
         UtpPortalGatewayAdapter adapter = adapterWithRoutes(request -> {
             String uri = request.uri().toString();
+            if (uri.contains("/dashboard-courses")) {
+                return new FakeHttpClient.Response(200, "{\"data\":[]}");
+            }
             if (uri.contains("/graphql")) {
                 return new FakeHttpClient.Response(200,
                         "{\"data\":{\"scheduleByDate\":{\"dates\":[]}}}");

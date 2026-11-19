@@ -9,6 +9,7 @@ import com.utp.horario.domain.model.AcademicActivity;
 import com.utp.horario.domain.model.ClassSession;
 import com.utp.horario.domain.model.Course;
 import com.utp.horario.domain.model.CourseSummaryData;
+import com.utp.horario.domain.model.ModalityType;
 import com.utp.horario.domain.model.RubricCriterion;
 import com.utp.horario.domain.model.RubricLevel;
 import com.utp.horario.domain.model.ScheduleInterval;
@@ -36,12 +37,14 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Component
@@ -924,6 +927,10 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         } catch (AuthenticationException e) {
             throw e;
         } catch (RuntimeException e) {
+            if (isDashboardFailure(e)) {
+                // Un fallo del catálogo institucional NUNCA se degrada a horario vacío.
+                throw e;
+            }
             graphqlFailure = e;
             log.warn("[UTP Portal GraphQL] Error consultando GraphQL portal: {}. Intentando fallback PAO...", e.getMessage());
         }
@@ -964,7 +971,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 }
                 JsonNode intervalNode = root.path("data").path("current_interval");
                 if (intervalNode != null && intervalNode.hasNonNull("events")) {
-                    return parsePaoCalendarResponse(intervalNode, extractStudentCodeFromToken(token));
+                    return parsePaoCalendarResponse(intervalNode, extractStudentCodeFromToken(token), token);
                 }
                 // 200 sin eventos: el periodo no tiene clases programadas; es un vacío legítimo.
                 return emptyScheduleInterval(period);
@@ -1016,6 +1023,15 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         long nowMillis = System.currentTimeMillis();
         long diffMillis = nowMillis - semesterStartMillis;
         int currentWeekCalc = (int) Math.max(1, Math.min(18, (diffMillis / (7L * 24 * 60 * 60 * 1000L)) + 1));
+
+        // Catálogo institucional (FAIL-FAST): fuente de courseCode, classNumber y modalidad real.
+        List<DashboardCourseRef> dashboard = loadDashboardCourses(token);
+        Map<String, DashboardCourseRef> dashboardBySectionId = dashboard.stream()
+                .filter(r -> r.sectionId() != null && !r.sectionId().isBlank())
+                .collect(Collectors.toMap(DashboardCourseRef::sectionId, r -> r, (a, b) -> a, LinkedHashMap::new));
+        Map<String, DashboardCourseRef> dashboardByName = dashboard.stream()
+                .filter(r -> r.name() != null && !r.name().isBlank())
+                .collect(Collectors.toMap(r -> normalizeCourseName(r.name()), r -> r, (a, b) -> a, LinkedHashMap::new));
 
         List<ClassSession> allClasses = new ArrayList<>();
         Map<String, Course> coursesMap = new HashMap<>();
@@ -1118,8 +1134,21 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                                         }
                                     }
 
-                                    registerCourseRef(studentCode, cleanCourseName, sectionCode, courseUuid, sectionUuid, null);
-                                    registerCourseRef(studentCode, courseNameRaw, sectionCode, courseUuid, sectionUuid, null);
+                                    // JOIN determinista: UUID de Canvas del aula -> catálogo institucional.
+                                    DashboardCourseRef officialRef = dashboardBySectionId.get(sectionUuid);
+                                    if (officialRef == null) {
+                                        officialRef = dashboardByName.get(normalizeCourseName(cleanCourseName));
+                                    }
+                                    String officialCode = officialRef != null ? officialRef.courseCode() : null;
+                                    String officialSection = officialRef != null && officialRef.classNumber() != null
+                                            && !officialRef.classNumber().isBlank()
+                                            ? officialRef.classNumber() : sectionCode;
+                                    if (sectionUuid.isBlank() && officialRef != null && officialRef.sectionId() != null) {
+                                        sectionUuid = officialRef.sectionId();
+                                    }
+
+                                    registerCourseRef(studentCode, cleanCourseName, officialSection, courseUuid, sectionUuid, null);
+                                    registerCourseRef(studentCode, courseNameRaw, officialSection, courseUuid, sectionUuid, null);
 
                                     long startEpoch = cls.path("start").asLong();
                                     long endEpoch = cls.path("end").asLong();
@@ -1154,20 +1183,29 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                                     LocalDateTime startAt = LocalDateTime.ofInstant(Instant.ofEpochMilli(startEpoch), ZoneId.of("America/Lima"));
                                     LocalDateTime finishAt = LocalDateTime.ofInstant(Instant.ofEpochMilli(endEpoch), ZoneId.of("America/Lima"));
 
+                                    // La modalidad VT es asíncrona: no emite franja fija para no generar
+                                    // cruces falsos con clases sincrónicas en el Read Model del backend.
+                                    ModalityType sessionModality = officialRef != null
+                                            && officialRef.modality() != ModalityType.UNKNOWN
+                                            ? officialRef.modality() : ModalityType.from(instructionMode);
+                                    boolean asyncVirtual = sessionModality.isAsyncVirtual();
+                                    String environment = asyncVirtual ? "TUTORÍA VIRTUAL 24/7" : descAmb;
 
                                     ClassSession session = ClassSession.builder()
                                             .id(classId.isBlank() ? "gql-" + startEpoch : classId)
-                                            .courseCode(cleanCourseName)
+                                            .courseCode(officialCode)
                                             .courseName(cleanCourseName)
-                                            .section(sectionCode)
+                                            .section(officialSection)
+                                            .sectionId(sectionUuid.isBlank() ? null : sectionUuid)
+                                            .modalityType(sessionModality)
                                             .classroom(roomId.isBlank() ? "Aula General" : roomId)
                                             .building(bldgDesc)
                                             .floor(floor)
-                                            .environmentType(descAmb)
+                                            .environmentType(environment)
                                             .teacher(teacher)
-                                            .modality(instructionMode)
-                                            .startAt(startAt)
-                                            .finishAt(finishAt)
+                                            .modality(asyncVirtual ? "VT" : instructionMode)
+                                            .startAt(asyncVirtual ? null : startAt)
+                                            .finishAt(asyncVirtual ? null : finishAt)
                                             .zoomLink(linkZoom)
                                             .classLink(linkCourseClass)
                                             .build();
@@ -1177,24 +1215,31 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                                     if (!coursesMap.containsKey(cleanCourseName)) {
                                         coursesMap.put(cleanCourseName, Course.builder()
                                                 .id("c-" + cleanCourseName.toLowerCase().replaceAll("[^a-z0-9]", "-"))
-                                                .code("")
+                                                .code(officialCode)
                                                 .name(cleanCourseName)
-                                                .section(sectionCode)
+                                                .section(officialSection)
+                                                .sectionId(sectionUuid.isBlank() ? null : sectionUuid)
+                                                .modalityType(sessionModality)
                                                 .credits(3)
                                                 .teacher(teacher)
-                                                .modality(instructionMode.equals("P") ? "Presencial" : (instructionMode.equals("R") ? "Remoto Zoom" : "Virtual"))
+                                                .modality(asyncVirtual ? "Virtual 24/7"
+                                                        : (instructionMode.equals("P") ? "Presencial" : "Remoto Zoom"))
                                                 .weeklyHours(4)
                                                 .build());
                                     } else {
                                         Course existing = coursesMap.get(cleanCourseName);
                                         boolean needsTeacher = (existing.getTeacher() == null || existing.getTeacher().isBlank()) && !teacher.isBlank();
-                                        boolean needsSection = (existing.getSection() == null || existing.getSection().isBlank()) && !sectionCode.isBlank();
-                                        if (needsTeacher || needsSection) {
+                                        boolean needsCode = existing.getCode() == null && officialCode != null;
+                                        boolean needsSection = (existing.getSection() == null || existing.getSection().isBlank()) && !officialSection.isBlank();
+                                        if (needsTeacher || needsCode || needsSection) {
                                             coursesMap.put(cleanCourseName, Course.builder()
                                                     .id(existing.getId())
-                                                    .code(existing.getCode())
+                                                    .code(needsCode ? officialCode : existing.getCode())
                                                     .name(existing.getName())
-                                                    .section(needsSection ? sectionCode : existing.getSection())
+                                                    .section(needsSection ? officialSection : existing.getSection())
+                                                    .sectionId(existing.getSectionId() != null ? existing.getSectionId()
+                                                            : (sectionUuid.isBlank() ? null : sectionUuid))
+                                                    .modalityType(sessionModality)
                                                     .credits(existing.getCredits())
                                                     .teacher(needsTeacher ? teacher : existing.getTeacher())
                                                     .modality(existing.getModality())
@@ -1436,7 +1481,13 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 .toUpperCase();
     }
 
-    private ScheduleInterval parsePaoCalendarResponse(JsonNode intervalNode, String studentCode) {
+    private ScheduleInterval parsePaoCalendarResponse(JsonNode intervalNode, String studentCode, String token) {
+        // Catálogo institucional: misma resolución del Checkpoint 1/2 de la bitácora.
+        List<DashboardCourseRef> dashboard = loadDashboardCourses(token);
+        Map<String, DashboardCourseRef> dashboardBySectionId = dashboard.stream()
+                .filter(r -> r.sectionId() != null && !r.sectionId().isBlank())
+                .collect(Collectors.toMap(DashboardCourseRef::sectionId, r -> r, (a, b) -> a, LinkedHashMap::new));
+
         String periodName = intervalNode.path("period_name").asText("2026 - Ciclo 2 Agosto");
         int weekNumber = intervalNode.path("week_number").asInt(1);
         int totalWeeks = intervalNode.path("total_weeks").asInt(18);
@@ -1470,9 +1521,20 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 String sectionUuid = sectionId.matches("^[0-9a-fA-F-]{36}$") ? sectionId : "";
                 String finalSection = !parsed.sectionCode.isBlank() ? parsed.sectionCode : (sectionId.matches("^\\d+$") ? sectionId : "");
 
-                registerCourseRef(studentCode, parsed.cleanTitle, finalSection, courseUuid, sectionUuid, syllabusUrl);
-                registerCourseRef(studentCode, rawTitle, finalSection, courseUuid, sectionUuid, syllabusUrl);
-                if (!courseId.isBlank()) registerCourseRef(studentCode, courseId, finalSection, courseUuid, sectionUuid, syllabusUrl);
+                DashboardCourseRef officialRef = dashboardBySectionId.get(sectionUuid);
+                String officialCode = officialRef != null ? officialRef.courseCode() : null;
+                if (officialCode == null) {
+                    officialCode = validCatalogCode(resolveCourseCode(sectionUuid, parsed.cleanTitle, token));
+                }
+                String officialSection = officialRef != null && officialRef.classNumber() != null
+                        && !officialRef.classNumber().isBlank() ? officialRef.classNumber() : finalSection;
+                ModalityType sessionModality = officialRef != null && officialRef.modality() != ModalityType.UNKNOWN
+                        ? officialRef.modality() : ModalityType.from(modality);
+                boolean asyncVirtual = sessionModality.isAsyncVirtual();
+
+                registerCourseRef(studentCode, parsed.cleanTitle, officialSection, courseUuid, sectionUuid, syllabusUrl);
+                registerCourseRef(studentCode, rawTitle, officialSection, courseUuid, sectionUuid, syllabusUrl);
+                if (!courseId.isBlank()) registerCourseRef(studentCode, courseId, officialSection, courseUuid, sectionUuid, syllabusUrl);
 
                 // Parsing defensivo de marcas de tiempo: un formato inesperado del proveedor
                 // no debe abortar la sincronización completa del horario.
@@ -1481,17 +1543,20 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
 
                 classes.add(ClassSession.builder()
                         .id(id)
-                        .courseCode(courseId.isBlank() ? parsed.cleanTitle : courseId)
+                        .courseCode(officialCode)
                         .courseName(parsed.cleanTitle)
-                        .section(parsed.sectionCode.isBlank() ? sectionId : parsed.sectionCode)
+                        .section(officialSection)
+                        .sectionId(sectionUuid.isBlank() ? null : sectionUuid)
+                        .modalityType(sessionModality)
                         .classroom(loc.aula)
                         .building(loc.pabellon)
                         .floor("")
-                        .environmentType(modality.equals("P") ? "AULA TEÓRICA" : "AULA VIRTUAL")
+                        .environmentType(asyncVirtual ? "TUTORÍA VIRTUAL 24/7"
+                                : (modality.equals("P") ? "AULA TEÓRICA" : "AULA VIRTUAL"))
                         .teacher("")
-                        .modality(modality)
-                        .startAt(startAt)
-                        .finishAt(finishAt)
+                        .modality(asyncVirtual ? "VT" : modality)
+                        .startAt(asyncVirtual ? null : startAt)
+                        .finishAt(asyncVirtual ? null : finishAt)
                         .zoomLink(zoomLink)
                         .build());
 
@@ -1499,11 +1564,14 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                     seenCourseIds.add(parsed.cleanTitle);
                     courses.add(Course.builder()
                             .id("c-" + parsed.cleanTitle.toLowerCase().replaceAll("[^a-z0-9]", "-"))
-                            .code(courseId)
+                            .code(officialCode)
                             .name(parsed.cleanTitle)
-                            .section(parsed.sectionCode.isBlank() ? sectionId : parsed.sectionCode)
+                            .section(officialSection)
+                            .sectionId(sectionUuid.isBlank() ? null : sectionUuid)
+                            .modalityType(sessionModality)
                             .credits(3)
-                            .modality(modality.equals("P") ? "Presencial" : (modality.equals("R") ? "Remoto Zoom" : "Virtual"))
+                            .modality(asyncVirtual ? "Virtual 24/7"
+                                    : (modality.equals("P") ? "Presencial" : "Remoto Zoom"))
                             .weeklyHours(4)
                             .build());
                 }
@@ -1748,6 +1816,117 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
     private final Map<String, String> sectionToCourseCodeCache = new ConcurrentHashMap<>();
     private final Map<String, String> courseNameToCourseCodeCache = new ConcurrentHashMap<>();
 
+    /** Referencia institucional completa por sección, derivada del dashboard de UTP+ Class. */
+    private record DashboardCourseRef(String sectionId, String courseCode, String classNumber,
+                                      String sectionCode, String name, ModalityType modality) {}
+
+    /** Marcador para impedir que un fallo del catálogo se degrade a un horario vacío. */
+    private static final class DashboardAuthException extends AuthenticationException {
+        DashboardAuthException(String message) { super(message); }
+    }
+
+    private static final class DashboardNotFoundException extends ResourceNotFoundException {
+        DashboardNotFoundException(String message) { super(message); }
+    }
+
+    private static final class DashboardUpstreamException extends UpstreamServiceException {
+        DashboardUpstreamException(String message, Throwable cause) { super(message, cause); }
+        DashboardUpstreamException(String message) { super(message); }
+    }
+
+    private static boolean isDashboardFailure(RuntimeException e) {
+        return e instanceof DashboardAuthException
+                || e instanceof DashboardNotFoundException
+                || e instanceof DashboardUpstreamException;
+    }
+
+    /** Patrón canónico del código de catálogo UTP (10 caracteres, sin espacios). */
+    private static final Pattern CATALOG_CODE_PATTERN = Pattern.compile("(?i)^\\d{6}[A-Z0-9]{4}$");
+
+    private static String validCatalogCode(String candidate) {
+        if (candidate == null) return null;
+        String value = candidate.trim();
+        return CATALOG_CODE_PATTERN.matcher(value).matches() ? value.toUpperCase() : null;
+    }
+
+    /**
+     * Carga el dashboard institucional de forma FAIL-FAST. Los errores 401/403/404/5xx y de red
+     * se propagan como excepciones tipadas; nunca se devuelve un catálogo simulado.
+     */
+    private List<DashboardCourseRef> loadDashboardCourses(String token) {
+        String effectiveToken = (token != null && token.startsWith("Bearer ")) ? token.substring(7).trim() : token;
+        if (effectiveToken == null || effectiveToken.isBlank()) {
+            throw new DashboardAuthException("Se requiere token de sesión UTP para resolver el catálogo de cursos.");
+        }
+        String userId = extractUserIdFromToken(effectiveToken);
+        String tenantId = extractTenantIdFromToken(effectiveToken);
+        String url = getPaoEndpoint("/learning/student/" + userId + "/dashboard-courses");
+
+        HttpResponse<String> resp;
+        try {
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(10))
+                    .header("accept", "*/*")
+                    .header("authorization", "Bearer " + effectiveToken)
+                    .header("user-id", userId)
+                    .header("user-role", "STUDENT")
+                    .header("x-tenant-id", tenantId)
+                    .header("origin", "https://class.utp.edu.pe")
+                    .header("referer", "https://class.utp.edu.pe/")
+                    .header("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                    .GET()
+                    .build();
+            resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+        } catch (IOException e) {
+            throw new DashboardUpstreamException("Error de red al consultar dashboard-courses: " + e.getMessage(), e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new DashboardUpstreamException("Llamada interrumpida al consultar dashboard-courses.", e);
+        }
+
+        int status = resp.statusCode();
+        if (status == 401 || status == 403) {
+            throw new DashboardAuthException("Sesión UTP rechazada por UTP+ Class al consultar dashboard-courses (HTTP " + status + ").");
+        }
+        if (status == 404) {
+            throw new DashboardNotFoundException("No se encontró el catálogo de cursos del estudiante en UTP+ Class.");
+        }
+        if (status != 200) {
+            throw new DashboardUpstreamException("UTP+ Class respondió HTTP " + status + " al consultar dashboard-courses.");
+        }
+
+        try {
+            JsonNode data = objectMapper.readTree(resp.body()).path("data");
+            if (!data.isArray()) {
+                throw new DashboardUpstreamException("El dashboard de UTP+ Class no devolvió un arreglo de cursos.");
+            }
+            List<DashboardCourseRef> refs = new ArrayList<>();
+            for (JsonNode c : data) {
+                String sectionId = c.path("sectionId").asText(null);
+                String classNumber = c.path("classNumber").asText(null);
+                String sectionCode = c.path("sectionCode").asText("");
+                String name = c.path("name").asText(null);
+                String courseCode = validCatalogCode(c.path("courseCode").asText(null));
+                if (courseCode == null) {
+                    Matcher m = Pattern.compile("(?i)(100000[A-Z0-9]{4})").matcher(sectionCode);
+                    if (m.find()) courseCode = validCatalogCode(m.group(1));
+                }
+                ModalityType modality = ModalityType.from(c.path("modality").asText(null));
+                DashboardCourseRef ref = new DashboardCourseRef(sectionId, courseCode, classNumber, sectionCode, name, modality);
+                refs.add(ref);
+                if (sectionId != null && !sectionId.isBlank()) sectionToCourseCodeCache.put(sectionId, courseCode);
+                if (name != null && !name.isBlank()) courseNameToCourseCodeCache.put(normalizeCourseName(name), courseCode);
+            }
+            return refs;
+        } catch (RuntimeException e) {
+            if (isDashboardFailure(e)) throw e;
+            throw new DashboardUpstreamException("Error al procesar dashboard-courses: " + e.getMessage(), e);
+        } catch (Exception e) {
+            throw new DashboardUpstreamException("Error al procesar dashboard-courses: " + e.getMessage(), e);
+        }
+    }
+
     public String resolveCourseCode(String sectionId, String courseName, String token) {
         if (sectionId != null && !sectionId.isBlank() && sectionToCourseCodeCache.containsKey(sectionId)) {
             return sectionToCourseCodeCache.get(sectionId);
@@ -1776,59 +1955,10 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         return null;
     }
 
+    /** Vía legada (sílabos): mantiene la degradación silenciosa histórica sin afectar al horario. */
     private void fetchAndCacheDashboardCourses(String token) {
-        String effectiveToken = (token != null && token.startsWith("Bearer ")) ? token.substring(7).trim() : token;
-        String userId = extractUserIdFromToken(effectiveToken);
-        if (userId == null || userId.isBlank()) return;
-
-        String url = getPaoEndpoint("/learning/student/" + userId + "/dashboard-courses");
-        String tenantId = extractTenantIdFromToken(effectiveToken);
-
         try {
-            HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create(url))
-                    .timeout(Duration.ofSeconds(10))
-                    .header("accept", "*/*")
-                    .header("authorization", "Bearer " + effectiveToken)
-                    .header("user-id", userId)
-                    .header("user-role", "STUDENT")
-                    .header("x-tenant-id", tenantId)
-                    .header("origin", "https://class.utp.edu.pe")
-                    .header("referer", "https://class.utp.edu.pe/")
-                    .header("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                    .GET()
-                    .build();
-
-            HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
-            if (resp.statusCode() == 200) {
-                JsonNode root = objectMapper.readTree(resp.body());
-                JsonNode dataNode = root.path("data");
-                if (dataNode.isArray()) {
-                    for (JsonNode cNode : dataNode) {
-                        String sId = cNode.path("sectionId").asText(null);
-                        String cCode = cNode.path("courseCode").asText(null);
-                        String sCode = cNode.path("sectionCode").asText("");
-                        String cName = cNode.path("name").asText(null);
-
-                        if ((cCode == null || cCode.isBlank()) && !sCode.isBlank()) {
-                            Matcher m = Pattern.compile("(?i)(100000[A-Z0-9]{4})").matcher(sCode);
-                            if (m.find()) {
-                                cCode = m.group(1);
-                            }
-                        }
-
-                        if (cCode != null && !cCode.isBlank()) {
-                            if (sId != null && !sId.isBlank()) {
-                                sectionToCourseCodeCache.put(sId, cCode);
-                            }
-                            if (cName != null && !cName.isBlank()) {
-                                courseNameToCourseCodeCache.put(normalizeCourseName(cName), cCode);
-                            }
-                        }
-                    }
-                    log.info("[UtpPortalGatewayAdapter] Dashboard courses sincronizados en caché. Total secciones: {}", sectionToCourseCodeCache.size());
-                }
-            }
+            loadDashboardCourses(token);
         } catch (Exception e) {
             log.warn("[UtpPortalGatewayAdapter] No se pudo cargar dashboard-courses: {}", e.getMessage());
         }
