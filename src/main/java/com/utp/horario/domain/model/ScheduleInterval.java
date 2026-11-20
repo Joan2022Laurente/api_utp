@@ -21,4 +21,6 @@ public class ScheduleInterval {
     private LocalDate endDate;
     private List<Course> courses;
     private List<ClassSession> classes;
+    /** Estado del enriquecimiento de catálogo: "COMPLETE" o "PARTIAL". */
+    private String enrichmentStatus;
 }

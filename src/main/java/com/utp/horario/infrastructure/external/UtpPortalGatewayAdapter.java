@@ -36,9 +36,11 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -1006,6 +1008,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 .endDate(LocalDate.now().plusWeeks(18))
                 .courses(List.of())
                 .classes(List.of())
+                .enrichmentStatus("COMPLETE")
                 .build();
     }
 
@@ -1024,8 +1027,18 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         long diffMillis = nowMillis - semesterStartMillis;
         int currentWeekCalc = (int) Math.max(1, Math.min(18, (diffMillis / (7L * 24 * 60 * 60 * 1000L)) + 1));
 
-        // Catálogo institucional (FAIL-FAST): fuente de courseCode, classNumber y modalidad real.
-        List<DashboardCourseRef> dashboard = loadDashboardCourses(token);
+        // Catálogo institucional (aislamiento resiliente): fuente de courseCode, classNumber y modalidad real.
+        List<DashboardCourseRef> dashboard;
+        boolean dashboardUpstreamFailed = false;
+        try {
+            dashboard = loadDashboardCourses(token, periodCode);
+        } catch (DashboardAuthException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            dashboardUpstreamFailed = true;
+            log.warn("[UtpPortalGatewayAdapter] No se pudo enriquecer catálogo desde dashboard-courses ({}). Continuando con enriquecimiento parcial para horario GraphQL.", e.toString());
+            dashboard = Collections.emptyList();
+        }
         Map<String, DashboardCourseRef> dashboardBySectionId = dashboard.stream()
                 .filter(r -> r.sectionId() != null && !r.sectionId().isBlank())
                 .collect(Collectors.toMap(DashboardCourseRef::sectionId, r -> r, (a, b) -> a, LinkedHashMap::new));
@@ -1285,6 +1298,9 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
             return null;
         }
 
+        boolean isPartial = dashboardUpstreamFailed;
+        String enrichmentStatus = isPartial ? "PARTIAL" : "COMPLETE";
+
         return ScheduleInterval.builder()
                 .id("interval-graphql-" + currentWeekCalc)
                 .periodName("2026 - Ciclo 2 Agosto")
@@ -1294,6 +1310,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 .endDate(LocalDate.of(2026, 8, 10).plusWeeks(18))
                 .courses(new ArrayList<>(coursesMap.values()))
                 .classes(allClasses)
+                .enrichmentStatus(enrichmentStatus)
                 .build();
     }
 
@@ -1489,8 +1506,23 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
     }
 
     private ScheduleInterval parsePaoCalendarResponse(JsonNode intervalNode, String studentCode, String token) {
-        // Catálogo institucional: misma resolución del Checkpoint 1/2 de la bitácora.
-        List<DashboardCourseRef> dashboard = loadDashboardCourses(token);
+        JsonNode events = intervalNode.path("events");
+        boolean hasEvents = events.isArray() && !events.isEmpty();
+
+        // Catálogo institucional: misma resolución del Checkpoint 1/2 de la bitácora con aislamiento resiliente.
+        List<DashboardCourseRef> dashboard;
+        boolean dashboardUpstreamFailed = false;
+        try {
+            dashboard = loadDashboardCourses(token);
+        } catch (RuntimeException e) {
+            dashboardUpstreamFailed = true;
+            if (!hasEvents && isDashboardFailure(e)) {
+                // Si no hay eventos reales y el dashboard falló con 5xx/4xx, propagar para evitar falso horario vacío
+                throw e;
+            }
+            log.warn("[UtpPortalGatewayAdapter] No se pudo cargar dashboard-courses en parsePaoCalendarResponse ({}). Continuando con degradación parcial.", e.toString());
+            dashboard = Collections.emptyList();
+        }
         Map<String, DashboardCourseRef> dashboardBySectionId = dashboard.stream()
                 .filter(r -> r.sectionId() != null && !r.sectionId().isBlank())
                 .collect(Collectors.toMap(DashboardCourseRef::sectionId, r -> r, (a, b) -> a, LinkedHashMap::new));
@@ -1503,7 +1535,6 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         List<Course> courses = new ArrayList<>();
         List<String> seenCourseIds = new ArrayList<>();
 
-        JsonNode events = intervalNode.path("events");
         if (events.isArray()) {
             for (JsonNode ev : events) {
                 boolean isLongLasting = ev.path("isLongLasting").asBoolean(false);
@@ -1592,6 +1623,9 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
             }
         }
 
+        boolean isPartial = dashboardUpstreamFailed;
+        String enrichmentStatus = isPartial ? "PARTIAL" : "COMPLETE";
+
         return ScheduleInterval.builder()
                 .id("interval-live-" + weekNumber)
                 .periodName(periodName)
@@ -1601,6 +1635,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 .endDate(LocalDate.now().plusWeeks(totalWeeks - weekNumber))
                 .courses(courses)
                 .classes(classes)
+                .enrichmentStatus(enrichmentStatus)
                 .build();
     }
 
@@ -1854,26 +1889,52 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 || e instanceof DashboardUpstreamException;
     }
 
-    /** Patrón canónico del código de catálogo UTP (10 caracteres, sin espacios). */
-    private static final Pattern CATALOG_CODE_PATTERN = Pattern.compile("(?i)^\\d{6}[A-Z0-9]{4}$");
+    /**
+     * Modelo de código de catálogo institucional según variantes de la plataforma UTP:
+     * - REGULAR: 100000 + 4 alfanuméricos (ej. 100000S72T, 100000EMP1)
+     * - WORKSHOP: 10000TE + 3 dígitos (ej. 10000TE103)
+     * - OTHER: 10 caracteres alfanuméricos canónicos
+     */
+    public record CatalogCode(String value, Kind kind) {
+        public enum Kind { REGULAR, WORKSHOP, OTHER }
+
+        private static final Pattern REGULAR_PATTERN = Pattern.compile("^100000[A-Z0-9]{4}$");
+        private static final Pattern WORKSHOP_PATTERN = Pattern.compile("^10000TE\\d{3}$");
+        private static final Pattern GENERIC_PATTERN = Pattern.compile("^[A-Z0-9]{10}$");
+
+        public static java.util.Optional<CatalogCode> parse(String raw) {
+            if (raw == null) return java.util.Optional.empty();
+            String v = raw.trim().toUpperCase(Locale.ROOT);
+            if (REGULAR_PATTERN.matcher(v).matches()) return java.util.Optional.of(new CatalogCode(v, Kind.REGULAR));
+            if (WORKSHOP_PATTERN.matcher(v).matches()) return java.util.Optional.of(new CatalogCode(v, Kind.WORKSHOP));
+            if (GENERIC_PATTERN.matcher(v).matches()) return java.util.Optional.of(new CatalogCode(v, Kind.OTHER));
+            return java.util.Optional.empty();
+        }
+    }
+
+    private static final Pattern SECTION_EMBEDDED_PATTERN = Pattern.compile("(?i)(100000[A-Z0-9]{4}|10000TE\\d{3})");
 
     private static String validCatalogCode(String candidate) {
-        if (candidate == null) return null;
-        String value = candidate.trim();
-        return CATALOG_CODE_PATTERN.matcher(value).matches() ? value.toUpperCase() : null;
+        return CatalogCode.parse(candidate).map(CatalogCode::value).orElse(null);
     }
 
     /**
-     * Carga el dashboard institucional de forma FAIL-FAST. Los errores 401/403/404/5xx y de red
-     * se propagan como excepciones tipadas; nunca se devuelve un catálogo simulado.
+     * Carga el dashboard institucional de forma FAIL-FAST con aislamiento por ítem.
+     * Los errores 401/403/404/5xx y de red se propagan como excepciones tipadas;
+     * nunca se devuelve un catálogo simulado.
      */
     private List<DashboardCourseRef> loadDashboardCourses(String token) {
+        return loadDashboardCourses(token, null);
+    }
+
+    private List<DashboardCourseRef> loadDashboardCourses(String token, String targetPeriod) {
         String effectiveToken = (token != null && token.startsWith("Bearer ")) ? token.substring(7).trim() : token;
         if (effectiveToken == null || effectiveToken.isBlank()) {
             throw new DashboardAuthException("Se requiere token de sesión UTP para resolver el catálogo de cursos.");
         }
         String userId = extractUserIdFromToken(effectiveToken);
         String tenantId = extractTenantIdFromToken(effectiveToken);
+        String studentCode = extractStudentCodeFromToken(effectiveToken);
         String url = getPaoEndpoint("/learning/student/" + userId + "/dashboard-courses");
 
         HttpResponse<String> resp;
@@ -1915,29 +1976,86 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
             if (!data.isArray()) {
                 throw new DashboardUpstreamException("El dashboard de UTP+ Class no devolvió un arreglo de cursos.");
             }
+
+            // Normalizar targetPeriod a 4 dígitos para evitar descartar todo ante nombres descriptivos
+            String normalizedPeriod = null;
+            if (targetPeriod != null && !targetPeriod.isBlank()) {
+                if (targetPeriod.matches("^\\d{4}$")) {
+                    normalizedPeriod = targetPeriod;
+                } else if (targetPeriod.contains("2026") && targetPeriod.contains("2")) {
+                    normalizedPeriod = "2263";
+                }
+            }
+
+            int totalItems = data.size();
+            int parsedCount = 0;
+            int omittedCount = 0;
             List<DashboardCourseRef> refs = new ArrayList<>();
+
             for (JsonNode c : data) {
                 String sectionId = c.path("sectionId").asText(null);
-                String classNumber = c.path("classNumber").asText(null);
-                String sectionCode = c.path("sectionCode").asText("");
                 String name = c.path("name").asText(null);
-                String courseCode = validCatalogCode(c.path("courseCode").asText(null));
-                if (courseCode == null) {
-                    Matcher m = Pattern.compile("(?i)(100000[A-Z0-9]{4})").matcher(sectionCode);
-                    if (m.find()) courseCode = validCatalogCode(m.group(1));
+                try {
+                    // Filtrar historial de periodos previos si se especificó periodo objetivo (ej. 2263 o talleres 9999)
+                    if (normalizedPeriod != null) {
+                        String coursePeriod = c.path("period").asText("");
+                        if (coursePeriod.isBlank()) {
+                            String sc = c.path("sectionCode").asText("");
+                            if (sc.length() >= 4 && sc.substring(0, 4).matches("^\\d{4}$")) {
+                                coursePeriod = sc.substring(0, 4);
+                            }
+                        }
+                        if (!coursePeriod.isBlank() && !coursePeriod.equals(normalizedPeriod) && !coursePeriod.equals("9999")) {
+                            continue;
+                        }
+                    }
+
+                    String classNumber = c.path("classNumber").asText(null);
+                    String sectionCode = c.path("sectionCode").asText("");
+                    String courseCode = validCatalogCode(c.path("courseCode").asText(null));
+                    if (courseCode == null) {
+                        Matcher m = SECTION_EMBEDDED_PATTERN.matcher(sectionCode);
+                        if (m.find()) {
+                            courseCode = validCatalogCode(m.group(1));
+                        }
+                    }
+                    ModalityType modality = ModalityType.from(c.path("modality").asText(null));
+                    DashboardCourseRef ref = new DashboardCourseRef(sectionId, courseCode, classNumber, sectionCode, name, modality);
+                    refs.add(ref);
+
+                    // Prevención estricta de NPE en ConcurrentHashMap y aislamiento total multi-alumno
+                    if (courseCode != null && !courseCode.isBlank()) {
+                        parsedCount++;
+                        if (sectionId != null && !sectionId.isBlank()) {
+                            sectionToCourseCodeCache.put(sectionId, courseCode);
+                        }
+                        // Clave ESTRICTAMENTE acotada por estudiante: CERO clave global para evitar contaminación de mallas
+                        if (name != null && !name.isBlank() && !studentCode.isBlank()) {
+                            String norm = normalizeCourseName(name);
+                            courseNameToCourseCodeCache.put(studentCode + ":" + norm, courseCode);
+                        }
+                    } else {
+                        omittedCount++;
+                    }
+                } catch (RuntimeException itemEx) {
+                    omittedCount++;
+                    log.warn("[UtpPortalGatewayAdapter] Curso malformado omitido en dashboard-courses (sectionId={}, name={}): {}",
+                            sectionId, name, itemEx.toString());
                 }
-                ModalityType modality = ModalityType.from(c.path("modality").asText(null));
-                DashboardCourseRef ref = new DashboardCourseRef(sectionId, courseCode, classNumber, sectionCode, name, modality);
-                refs.add(ref);
-                if (sectionId != null && !sectionId.isBlank()) sectionToCourseCodeCache.put(sectionId, courseCode);
-                if (name != null && !name.isBlank()) courseNameToCourseCodeCache.put(normalizeCourseName(name), courseCode);
             }
+
+            if (totalItems > 0 && parsedCount == 0) {
+                log.error("[UtpPortalGatewayAdapter] ALERTA CRITICA: Ningún curso de los {} presentes en dashboard-courses tuvo código de catálogo resoluble.", totalItems);
+            } else if (omittedCount > 0) {
+                log.warn("[UtpPortalGatewayAdapter] dashboard-courses: {} cursos sin código de catálogo resoluble de un total de {}", omittedCount, totalItems);
+            }
+
             return refs;
         } catch (RuntimeException e) {
             if (isDashboardFailure(e)) throw e;
-            throw new DashboardUpstreamException("Error al procesar dashboard-courses: " + e.getMessage(), e);
+            throw new DashboardUpstreamException("Error al procesar dashboard-courses: " + e, e);
         } catch (Exception e) {
-            throw new DashboardUpstreamException("Error al procesar dashboard-courses: " + e.getMessage(), e);
+            throw new DashboardUpstreamException("Error al procesar dashboard-courses: " + e, e);
         }
     }
 
@@ -1945,10 +2063,12 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         if (sectionId != null && !sectionId.isBlank() && sectionToCourseCodeCache.containsKey(sectionId)) {
             return sectionToCourseCodeCache.get(sectionId);
         }
-        if (courseName != null && !courseName.isBlank()) {
+        String studentCode = (token != null) ? extractStudentCodeFromToken(token) : "";
+        if (courseName != null && !courseName.isBlank() && !studentCode.isBlank()) {
             String norm = normalizeCourseName(courseName);
-            if (courseNameToCourseCodeCache.containsKey(norm)) {
-                return courseNameToCourseCodeCache.get(norm);
+            String scopedKey = studentCode + ":" + norm;
+            if (courseNameToCourseCodeCache.containsKey(scopedKey)) {
+                return courseNameToCourseCodeCache.get(scopedKey);
             }
         }
 
@@ -1958,10 +2078,11 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
             if (sectionId != null && !sectionId.isBlank() && sectionToCourseCodeCache.containsKey(sectionId)) {
                 return sectionToCourseCodeCache.get(sectionId);
             }
-            if (courseName != null && !courseName.isBlank()) {
+            if (courseName != null && !courseName.isBlank() && !studentCode.isBlank()) {
                 String norm = normalizeCourseName(courseName);
-                if (courseNameToCourseCodeCache.containsKey(norm)) {
-                    return courseNameToCourseCodeCache.get(norm);
+                String scopedKey = studentCode + ":" + norm;
+                if (courseNameToCourseCodeCache.containsKey(scopedKey)) {
+                    return courseNameToCourseCodeCache.get(scopedKey);
                 }
             }
         }
