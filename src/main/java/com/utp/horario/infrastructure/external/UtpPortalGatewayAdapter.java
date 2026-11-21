@@ -159,21 +159,33 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 for (JsonNode node : array) {
                     String id = node.path("id").asText();
                     String code = node.path("code").asText();
+                    String name = node.path("name").asText();
                     boolean matches = searchSpecific
-                            ? (id.equals(targetPeriodId) || code.equalsIgnoreCase(targetPeriodId))
+                            ? (id.equals(targetPeriodId) || code.equalsIgnoreCase(targetPeriodId) || name.equalsIgnoreCase(targetPeriodId))
                             : node.path("isCurrent").asBoolean(false);
 
                     if (matches) {
-                        String name = node.path("name").asText();
                         boolean isCurr = node.path("isCurrent").asBoolean(false);
                         String startStr = node.path("startDate").asText();
                         String endStr = node.path("endDate").asText();
-                        LocalDate start = (startStr != null && startStr.length() >= 10)
-                                ? LocalDate.parse(startStr.substring(0, 10))
-                                : null;
-                        LocalDate end = (endStr != null && endStr.length() >= 10)
-                                ? LocalDate.parse(endStr.substring(0, 10))
-                                : null;
+                        LocalDate start = null;
+                        LocalDate end = null;
+                        try {
+                            if (startStr != null && startStr.length() >= 10) {
+                                start = LocalDate.parse(startStr.substring(0, 10));
+                            }
+                        } catch (java.time.format.DateTimeParseException e) {
+                            throw new UpstreamServiceException(
+                                    "Fecha de inicio (startDate) del periodo '" + name + "' tiene formato ISO inválido: " + startStr, e);
+                        }
+                        try {
+                            if (endStr != null && endStr.length() >= 10) {
+                                end = LocalDate.parse(endStr.substring(0, 10));
+                            }
+                        } catch (java.time.format.DateTimeParseException e) {
+                            throw new UpstreamServiceException(
+                                    "Fecha de fin (endDate) del periodo '" + name + "' tiene formato ISO inválido: " + endStr, e);
+                        }
                         if (start == null) {
                             throw new UpstreamServiceException(
                                     "El periodo académico '" + name + "' de UTP no incluye fecha de inicio (startDate) válida.");
@@ -660,7 +672,8 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
 
         ensureBuildingsLoaded(token, studentCode);
 
-        AcademicPeriodInfo periodInfo = resolveAcademicPeriod(token, (period != null && period.matches("^\\d{4}$")) ? period : null);
+        String targetPeriod = (period != null && !period.isBlank()) ? period.trim() : null;
+        AcademicPeriodInfo periodInfo = resolveAcademicPeriod(token, targetPeriod);
         String currentPeriod = periodInfo.id();
         // Ruptura 5 (Checkpoint §13): conjunto compuesto de periodos, sin filtrar por
         // flag `active` (siempre true en Canvas) y preservando talleres 9999.
@@ -1133,8 +1146,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         Set<String> periods = null;
         if (targetPeriod != null && !targetPeriod.isBlank()) {
             periods = new LinkedHashSet<>();
-            String normalized = targetPeriod.matches("^\\d{4}$") ? targetPeriod.trim()
-                    : resolveCurrentAcademicPeriod(token).id();
+            String normalized = resolveAcademicPeriod(token, targetPeriod.trim()).id();
             if (normalized != null) {
                 periods.add(normalized);
             }
@@ -1674,7 +1686,9 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         if (studentCode == null || studentCode.isBlank()) {
             throw new AuthenticationException("Token de autenticación no contiene código de estudiante válido");
         }
-        String effectivePeriod = (periodId != null && !periodId.isBlank()) ? periodId : resolveCurrentAcademicPeriod(effectiveToken).id();
+        String effectivePeriod = (periodId != null && !periodId.isBlank())
+                ? periodId.trim()
+                : resolveCurrentAcademicPeriod(effectiveToken).id();
 
         String url = getPortalEndpoint();
         log.info("[UtpPortalGatewayAdapter] Consultando GetCourseSummary en Portal GraphQL para periodo: {}", effectivePeriod);

@@ -52,4 +52,29 @@ class SyllabusScheduleFsmTest {
         // Semana 18: tag PROY (índice 3)
         assertEquals("PROY", schedule.get(3).getEvaluation());
     }
+
+    @Test
+    @DisplayName("Debe detener el cronograma ante Bibliografía en minúsculas y no capturar libros como sesiones")
+    void shouldStopScheduleParsingAtBibliographyOrSystemEvaluation() {
+        String input = """
+                8. CRONOGRAMA DE ACTIVIDADES
+                1 1 Tema de Sesión 1
+                1 2 Tema de Sesión 2
+                Bibliografía
+                1 3 Tanenbaum, A. Redes de Computadoras
+                2 4 Silberschatz, A. Sistemas Operativos
+                Anexos
+                1 5 Anexo de Prácticas
+                """;
+
+        List<SyllabusWeeklySession> schedule = SyllabusScheduleFsm.buildWeeklySchedule(input, List.of());
+
+        assertNotNull(schedule);
+        assertEquals(2, schedule.size());
+        assertEquals(1, schedule.get(0).getWeek());
+        assertFalse(schedule.get(0).getTopic().contains("Tanenbaum"));
+        assertFalse(schedule.get(1).getTopic().contains("Tanenbaum"));
+        assertFalse(schedule.get(0).getTopic().contains("Silberschatz"));
+        assertFalse(schedule.get(1).getTopic().contains("Silberschatz"));
+    }
 }

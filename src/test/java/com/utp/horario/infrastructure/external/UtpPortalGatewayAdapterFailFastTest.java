@@ -146,4 +146,84 @@ class UtpPortalGatewayAdapterFailFastTest {
         assertNull(adapter.fetchSyllabusPdfText(VALID_TOKEN, ""));
         assertNull(adapter.fetchSyllabusPdfText(VALID_TOKEN, "   "));
     }
+
+    @Test
+    @DisplayName("resolveAcademicPeriod por código (ej. 2026-2) lo resuelve insensible a mayúsculas")
+    void resolveAcademicPeriodByCodeSuccess() {
+        String json = """
+                [
+                  {"id":"2263","code":"2026-2","name":"2026 - Ciclo 2 Agosto","isCurrent":true,"startDate":"2026-08-15","endDate":"2026-12-13"}
+                ]
+                """;
+        UtpPortalGatewayAdapter adapter = adapterWithAcademicPeriods(200, json);
+
+        UtpPortalGatewayAdapter.AcademicPeriodInfo info = adapter.resolveAcademicPeriod(VALID_TOKEN, "2026-2");
+        assertNotNull(info);
+        assertEquals("2263", info.id());
+        assertEquals("2026 - Ciclo 2 Agosto", info.name());
+    }
+
+    @Test
+    @DisplayName("resolveAcademicPeriod ante fecha ISO corrupta lanza UpstreamServiceException específica")
+    void malformedIsoDateThrowsUpstreamServiceException() {
+        String json = """
+                [
+                  {"id":"2263","code":"2026-2","name":"2026 - Ciclo 2","isCurrent":true,"startDate":"fecha-corrupta","endDate":"2026-12-13"}
+                ]
+                """;
+        UtpPortalGatewayAdapter adapter = adapterWithAcademicPeriods(200, json);
+
+        UpstreamServiceException ex = assertThrows(UpstreamServiceException.class,
+                () -> adapter.resolveAcademicPeriod(VALID_TOKEN, null));
+        assertTrue(ex.getMessage().contains("formato ISO inválido"));
+    }
+
+    @Test
+    @DisplayName("fetchSchedule con periodo histórico resuelve semanas, fechas y nombre de ese periodo")
+    void fetchScheduleWithHistoricPeriodResolvesHistoricDatesAndWeeks() {
+        FakeHttpClient client = new FakeHttpClient(request -> {
+            String uri = request.uri().toString();
+            if (uri.contains("/academicperiods")) {
+                return new FakeHttpClient.Response(200, """
+                        [
+                          {"id":"2253","code":"2025-2","name":"2025 - Ciclo 2 Agosto","isCurrent":false,"startDate":"2025-08-10","endDate":"2025-11-30"},
+                          {"id":"2263","code":"2026-2","name":"2026 - Ciclo 2 Agosto","isCurrent":true,"startDate":"2026-08-15","endDate":"2026-12-13"}
+                        ]
+                        """);
+            }
+            if (uri.contains("/dashboard-courses")) {
+                return new FakeHttpClient.Response(200, "{\"data\":[]}");
+            }
+            if (uri.contains("/graphql")) {
+                return new FakeHttpClient.Response(200, "{\"data\":{\"scheduleByDate\":{\"dates\":[]}}}");
+            }
+            return new FakeHttpClient.Response(200, "{}");
+        });
+        UtpPortalGatewayAdapter adapter = new UtpPortalGatewayAdapter(client);
+
+        ScheduleInterval interval = adapter.fetchSchedule(VALID_TOKEN, "2253");
+        assertNotNull(interval);
+        assertEquals("2025 - Ciclo 2 Agosto", interval.getPeriodName());
+        assertEquals(LocalDate.of(2025, 8, 10), interval.getStartDate());
+        assertEquals(LocalDate.of(2025, 11, 30), interval.getEndDate());
+        assertTrue(interval.getTotalWeeks() > 0);
+        assertEquals(17, interval.getTotalWeeks());
+    }
+
+    @Test
+    @DisplayName("fetchSchedule con periodo inválido que no existe en institución falla de inmediato")
+    void fetchScheduleWithInvalidPeriodThrowsUpstreamServiceException() {
+        FakeHttpClient client = new FakeHttpClient(request -> {
+            String uri = request.uri().toString();
+            if (uri.contains("/academicperiods")) {
+                return new FakeHttpClient.Response(200, """
+                        [{"id":"2263","code":"2026-2","name":"2026 - Ciclo 2 Agosto","isCurrent":true,"startDate":"2026-08-15","endDate":"2026-12-13"}]
+                        """);
+            }
+            return new FakeHttpClient.Response(200, "{}");
+        });
+        UtpPortalGatewayAdapter adapter = new UtpPortalGatewayAdapter(client);
+
+        assertThrows(UpstreamServiceException.class, () -> adapter.fetchSchedule(VALID_TOKEN, "periodo-inexistente"));
+    }
 }

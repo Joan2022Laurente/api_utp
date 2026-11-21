@@ -237,7 +237,11 @@ public class SyllabusScheduleFsm {
 
                         // Delimitador estricto: si se alcanza la siguiente sección rectora, detener la recolección
                         // para evitar interpretar bibliografía o anexos numerados como sesiones fantasmas.
-                        if (trimmed.matches("^(?:(?:[VvXxIi]+\\.|\\d+\\.)\\s*)?(?:SISTEMA DE EVALUACI[OÓ]N|FUENTES DE INFORMACI[OÓ]N|BIBLIOGRAF[IÍ]A|FUENTES BIBLIOGR[AÁ]FICAS).*$")) {
+                        String lower = trimmed.toLowerCase();
+                        if (lower.matches("^(?:(?:[vx i]+\\.|\\d+\\.)\\s*)?(?:sistema de evaluaci[oó]n|fuentes de informaci[oó]n|bibliograf[ií]a|fuentes bibliogr[aá]ficas|referencias|anexos).*$")
+                                || lower.startsWith("bibliograf")
+                                || lower.startsWith("referencias")
+                                || lower.startsWith("anexos")) {
                             break;
                         }
 

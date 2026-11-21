@@ -195,7 +195,7 @@ class UtpPortalGatewayAdapterUpstreamErrorTest {
                             + "\"week_number\":1,\"total_weeks\":18,\"events\":[]}}}");
         });
 
-        ScheduleInterval interval = adapter.fetchSchedule(TOKEN, "2026 - Ciclo 2 Agosto");
+        ScheduleInterval interval = adapter.fetchSchedule(TOKEN, "2263");
 
         assertNotNull(interval);
         assertNotNull(interval.getClasses());

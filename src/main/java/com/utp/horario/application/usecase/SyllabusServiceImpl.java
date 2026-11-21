@@ -14,7 +14,6 @@ import com.utp.horario.domain.model.SyllabusWeeklySession;
 import com.utp.horario.domain.port.in.SyllabusServicePort;
 import com.utp.horario.domain.port.out.SyllabusRepositoryPort;
 import com.utp.horario.domain.port.out.UtpPortalGatewayPort;
-import com.utp.horario.infrastructure.config.UtpProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -53,19 +52,6 @@ public class SyllabusServiceImpl implements SyllabusServicePort {
         this.syllabusMarkdownExporter = syllabusMarkdownExporter;
         this.syllabusSanitizer = syllabusSanitizer;
         this.syllabusValidator = syllabusValidator;
-    }
-
-    @Deprecated
-    public SyllabusServiceImpl(SyllabusRepositoryPort syllabusRepositoryPort,
-                               UtpPortalGatewayPort utpPortalGatewayPort,
-                               SyllabusParserEngine syllabusParserEngine,
-                               OpenRouterFleetService openRouterFleetService,
-                               SyllabusMarkdownExporter syllabusMarkdownExporter,
-                               SyllabusPdfToMarkdownSanitizer syllabusSanitizer,
-                               SyllabusDeterministicValidator syllabusValidator,
-                               UtpProperties utpProperties) {
-        this(syllabusRepositoryPort, utpPortalGatewayPort, syllabusParserEngine, openRouterFleetService,
-             syllabusMarkdownExporter, syllabusSanitizer, syllabusValidator);
     }
 
     /**
@@ -437,7 +423,7 @@ public class SyllabusServiceImpl implements SyllabusServicePort {
                        (sectionId != null && !sectionId.isBlank()) ? sectionId : courseCode;
         log.info("[SyllabusServiceImpl] Extrayendo texto crudo de PDF para target='{}' (courseCode='{}')", target, courseCode);
         String pdfText = utpPortalGatewayPort.fetchSyllabusPdfText(token != null ? token : "", target);
-        return pdfText != null ? pdfText : "";
+        return pdfText;
     }
 
     @Override
