@@ -96,9 +96,9 @@ class SyllabusParserEngineTest {
         assertEquals(40, proy.getWeightPercent());
         assertEquals("Grupal", proy.getModality());
 
-        // Validar 18 semanas de cronograma
+        // Validar semanas reales declaradas en el texto (5 semanas)
         assertNotNull(result.getWeeklySchedule());
-        assertEquals(18, result.getWeeklySchedule().size());
+        assertEquals(5, result.getWeeklySchedule().size());
         assertEquals("Arquitectura web moderna, Spring Boot y configuración inicial", result.getWeeklySchedule().get(0).getTopic());
         assertEquals("Configuración de endpoints, controladores y Dependency Injection", result.getWeeklySchedule().get(1).getTopic());
     }
@@ -158,7 +158,7 @@ class SyllabusParserEngineTest {
         assertNotNull(result);
         assertEquals("SERVICIOS CLOUD", result.getCourseName());
         assertEquals("100000SI97", result.getCourseCode());
-        assertEquals(18, result.getWeeklySchedule().size());
+        assertEquals(6, result.getWeeklySchedule().size());
 
         // Semana 1 debe contener ambos temas de la semana 1
         assertTrue(result.getWeeklySchedule().get(0).getTopic().contains("Introducción a Computación en Nube"));
@@ -173,11 +173,11 @@ class SyllabusParserEngineTest {
         // Semana 4 debe contener plataformas basadas en contenedores
         assertTrue(result.getWeeklySchedule().get(3).getTopic().contains("Plataformas basadas en Contenedores"));
 
-        // Semana 12 debe contener Planificación
-        assertTrue(result.getWeeklySchedule().get(11).getTopic().contains("Planificación (Scheduling)"));
+        // Semana 12 debe contener Planificación (índice 4)
+        assertTrue(result.getWeeklySchedule().get(4).getTopic().contains("Planificación (Scheduling)"));
 
-        // Semana 18 debe contener PROYECTO FINAL
-        assertTrue(result.getWeeklySchedule().get(17).getTopic().contains("PROYECTO FINAL"));
+        // Semana 18 debe contener PROYECTO FINAL (índice 5)
+        assertTrue(result.getWeeklySchedule().get(5).getTopic().contains("PROYECTO FINAL"));
     }
 
     @Test
@@ -236,7 +236,7 @@ class SyllabusParserEngineTest {
 
         assertNotNull(result);
         assertEquals("GESTIÓN DEL SERVICIO TI", result.getCourseName());
-        assertEquals(18, result.getWeeklySchedule().size());
+        assertEquals(6, result.getWeeklySchedule().size());
 
         // Semana 1: sesiones 1 y 2
         assertTrue(result.getWeeklySchedule().get(0).getTopic().contains("Introducción a la Gestión"));
@@ -248,15 +248,15 @@ class SyllabusParserEngineTest {
         // Semana 3: sesiones 5 y 6
         assertTrue(result.getWeeklySchedule().get(2).getTopic().contains("Diseño del Servicio"));
 
-        // Semana 6: PC1 (sesión 11 y 12)
-        assertTrue(result.getWeeklySchedule().get(5).getTopic().contains("Operación del Servicio"));
-        assertEquals("PC1", result.getWeeklySchedule().get(5).getEvaluation());
+        // Semana 6: PC1 (sesión 11 y 12) -> índice 3
+        assertTrue(result.getWeeklySchedule().get(3).getTopic().contains("Operación del Servicio"));
+        assertEquals("PC1", result.getWeeklySchedule().get(3).getEvaluation());
 
-        // Semana 14: PC2 (sesión 27 y 28)
-        assertEquals("PC2", result.getWeeklySchedule().get(13).getEvaluation());
+        // Semana 14: PC2 (sesión 27 y 28) -> índice 4
+        assertEquals("PC2", result.getWeeklySchedule().get(4).getEvaluation());
 
-        // Semana 18: PROY (sesión 35)
-        assertEquals("PROY", result.getWeeklySchedule().get(17).getEvaluation());
+        // Semana 18: PROY (sesión 35) -> índice 5
+        assertEquals("PROY", result.getWeeklySchedule().get(5).getEvaluation());
     }
 
     @Test
@@ -358,12 +358,13 @@ class SyllabusParserEngineTest {
         assertEquals(30, ti.getWeightPercent());
         assertEquals("TRABAJO DE INVESTIGACIÓN", ti.getDescription());
 
-        // Cronograma evaluations
-        assertEquals("ATI1", result.getWeeklySchedule().get(3).getEvaluation());
-        assertEquals("ATI2", result.getWeeklySchedule().get(7).getEvaluation());
-        assertEquals("ATI3", result.getWeeklySchedule().get(12).getEvaluation());
-        assertEquals("PA", result.getWeeklySchedule().get(16).getEvaluation());
-        assertEquals("TI", result.getWeeklySchedule().get(17).getEvaluation());
+        // Cronograma evaluations mapeadas a las 6 semanas reales
+        assertEquals(6, result.getWeeklySchedule().size());
+        assertEquals("ATI1", result.getWeeklySchedule().get(1).getEvaluation());
+        assertEquals("ATI2", result.getWeeklySchedule().get(2).getEvaluation());
+        assertEquals("ATI3", result.getWeeklySchedule().get(3).getEvaluation());
+        assertEquals("PA", result.getWeeklySchedule().get(4).getEvaluation());
+        assertEquals("TI", result.getWeeklySchedule().get(5).getEvaluation());
     }
 }
 

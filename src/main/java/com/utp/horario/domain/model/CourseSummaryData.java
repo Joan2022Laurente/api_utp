@@ -44,6 +44,10 @@ public class CourseSummaryData {
         private String formula;
         private String teacher;
         private String average;
+        /** Checkpoint §8.3: estado oficial Aprobado/Desaprobado del ciclo. */
+        private String approvalStatus;
+        /** Checkpoint §8.3: cuerpo docente tal como lo expone el Portal. */
+        private String professors;
         private List<EvaluationGrade> evaluations;
     }
 

@@ -18,7 +18,7 @@ import org.springframework.web.bind.annotation.RestController;
 /** Consulta del árbol canónico de contenidos de una sección de UTP+ Class. */
 @Tag(name = "Secciones", description = "Árbol completo de contenidos y actividades del aula virtual")
 @RestController
-@RequestMapping({"/sections", "/tasks/sections"})
+@RequestMapping("/sections")
 @RequiredArgsConstructor
 public class SectionController {
 

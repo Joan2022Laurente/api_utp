@@ -120,7 +120,7 @@ public class SyllabusPopulationAndAnalysisIntegrationTest {
                 "Dependencias externas (Supabase/OpenRouter) no alcanzables: se omite la prueba de integración en red.");
 
         System.out.println("================================================================================");
-        System.out.println("🚀 INICIANDO POBLAMIENTO Y ANÁLISIS DE SÍLABOS EN BD DEDICADA");
+        System.out.println("INICIANDO POBLAMIENTO Y ANÁLISIS DE SÍLABOS EN BD DEDICADA");
         System.out.println("   URL Supabase: " + supabaseProperties.getUrl());
         System.out.println("   Tabla: " + supabaseProperties.getTable());
         System.out.println("================================================================================\n");
@@ -207,18 +207,18 @@ public class SyllabusPopulationAndAnalysisIntegrationTest {
             String code = entry.getKey();
             String rawText = entry.getValue();
 
-            System.out.println("⏳ Procesando sílabo oficial: " + code + " (longitud texto: " + rawText.length() + " chars)...");
+            System.out.println("Procesando sílabo oficial: " + code + " (longitud texto: " + rawText.length() + " chars)...");
             Syllabus saved = syllabusService.parseAndSaveSyllabusText(code, rawText);
             assertNotNull(saved, "El sílabo procesado no debe ser nulo para: " + code);
             processedResults.put(code, saved);
-            System.out.println("   ✅ Persistido con éxito: " + saved.getCourseName() + " (" + saved.getCourseCode() + ")\n");
+            System.out.println("   Persistido con éxito: " + saved.getCourseName() + " (" + saved.getCourseCode() + ")\n");
         }
 
         assertEquals(6, processedResults.size(), "Deben haberse procesado los 6 sílabos");
 
         // 4. ANÁLISIS EXHAUSTIVO DE LOS DATOS ALMACENADOS EN SUPABASE
         System.out.println("\n================================================================================");
-        System.out.println("🔍 INICIANDO AUDITORÍA Y ANÁLISIS DE REGISTROS ALMACENADOS EN SUPABASE");
+        System.out.println("INICIANDO AUDITORÍA Y ANÁLISIS DE REGISTROS ALMACENADOS EN SUPABASE");
         System.out.println("================================================================================\n");
 
         int totalEvaluaciones = 0;
@@ -279,7 +279,7 @@ public class SyllabusPopulationAndAnalysisIntegrationTest {
         }
 
         System.out.println("================================================================================");
-        System.out.println("📊 REPORTE DE AUDITORÍA Y RESULTADOS GLOBALES:");
+        System.out.println("REPORTE DE AUDITORÍA Y RESULTADOS GLOBALES:");
         System.out.println("   Total Cursos Procesados y Persistidos: " + syllabiSources.size());
         System.out.println("   Total Evaluaciones Estructuradas: " + totalEvaluaciones);
         System.out.println("   Total Sesiones Semanales Validadas: " + totalSemanas);

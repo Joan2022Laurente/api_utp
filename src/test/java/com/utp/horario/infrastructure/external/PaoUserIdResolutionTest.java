@@ -1,120 +1,108 @@
 package com.utp.horario.infrastructure.external;
 
+import com.utp.horario.support.FakeHttpClient;
 import com.utp.horario.support.TestTokens;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
-import java.util.List;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Pruebas de regresión de la resolución en cascada del {@code paoUserId}.
+ * Resolución de identidad PAO 100% determinista (Checkpoint §19).
  *
- * <p>Cubren laInvestigación de arquitectura (H-06 ampliado): el {@code paoUserId} es una
- * clave interna de PAO y debe resolverse sin intervention manual cuando sea derivable,
- * manteniendo aislamiento estricto por alumno.</p>
+ * <p>Tras la Fase 2 no hay mapas en memoria, sondas HTTP ni caché en disco: el paoUserId
+ * se deriva por UUIDv5 en 0 ms. Estos tests sustituyen a los antiguos tests de cascada
+ * conservando su número y sus garantías de aislamiento multi-alumno.</p>
  */
 class PaoUserIdResolutionTest {
 
-    private final UtpPortalGatewayAdapter adapter = new UtpPortalGatewayAdapter();
-
-    @SuppressWarnings("unchecked")
-    private Map<String, String> registry() throws Exception {
-        Field field = UtpPortalGatewayAdapter.class.getDeclaredField("derivedPaoUserMap");
-        field.setAccessible(true);
-        return (Map<String, String>) field.get(adapter);
-    }
-
-    private Method method(String name, Class<?>... params) throws Exception {
-        Method m = UtpPortalGatewayAdapter.class.getDeclaredMethod(name, params);
-        m.setAccessible(true);
-        return m;
+    private UtpPortalGatewayAdapter adapter(FakeHttpClient client) {
+        return new UtpPortalGatewayAdapter(client);
     }
 
     @Test
-    @DisplayName("Un claim paoUserId del token se resuelve como candidato (via automatica)")
-    void paoUserIdClaimIsExtractedAsCandidate() throws Exception {
+    @DisplayName("Un claim paoUserId del token ya no se usa: manda la derivación UUIDv5")
+    void paoUserIdClaimIsExtractedAsCandidate() {
         String token = TestTokens.build("U99999999", 4102444800L,
-                java.util.Map.of("paoUserId", "11111111-2222-3333-4444-555555555555"));
+                Map.of("paoUserId", "11111111-2222-3333-4444-555555555555"));
+        String resolved = adapter(FakeHttpClient.always(200, "{}")).extractUserIdFromToken(token);
 
-        @SuppressWarnings("unchecked")
-        List<String> candidates = (List<String>) method("extractPaoUserIdCandidatesFromToken", String.class)
-                .invoke(adapter, token);
-
-        assertFalse(candidates.isEmpty(), "El claim paoUserId debe extraerse como candidato");
-        assertEquals("11111111-2222-3333-4444-555555555555", candidates.get(0));
+        assertEquals(PaoUserIdDeriver.derive("U99999999@UTP.EDU.PE"), resolved);
+        assertNotEquals("11111111-2222-3333-4444-555555555555", resolved);
     }
 
     @Test
-    @DisplayName("Un token sin claim de PAO no produce candidatos automaticos")
-    void tokenWithoutPaoClaimHasNoCandidates() throws Exception {
-        @SuppressWarnings("unchecked")
-        List<String> candidates = (List<String>) method("extractPaoUserIdCandidatesFromToken", String.class)
-                .invoke(adapter, TestTokens.validFor("U99999999"));
+    @DisplayName("Un token sin claim de PAO resuelve igual por derivación determinista")
+    void tokenWithoutPaoClaimHasNoCandidates() {
+        String token = TestTokens.validFor("U99999999");
+        String resolved = adapter(FakeHttpClient.always(200, "{}")).extractUserIdFromToken(token);
 
-        assertTrue(candidates.isEmpty(), "Sin claim paoUserId no debe inventarse un candidato");
+        assertEquals(36, resolved.length());
+        assertTrue(resolved.matches("^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"));
     }
 
     @Test
-    @DisplayName("El registro PAO se indexa por codigo de alumno en minusculas (aislamiento multi-tenant)")
-    void registryIsIndexedByLowercaseStudentCode() throws Exception {
-        method("registerPaoUserId", String.class, String.class)
-                .invoke(adapter, "U99999999", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
-
-        Map<String, String> map = registry();
-        assertTrue(map.containsKey("u99999999"), "La clave debe normalizarse a minusculas");
-        assertFalse(map.containsKey("current-student"), "No debe existir ninguna clave compartida");
-        assertEquals(1, map.size());
+    @DisplayName("No existen cachés de identidad indexadas por alumno")
+    void registryIsIndexedByLowercaseStudentCode() {
+        for (Field field : UtpPortalGatewayAdapter.class.getDeclaredFields()) {
+            String name = field.getName().toLowerCase();
+            assertFalse(name.contains("paousermap"), "No debe existir caché " + field.getName());
+            assertFalse(name.contains("paoidentity"), "No debe existir caché " + field.getName());
+            assertFalse(name.contains("discoveryattempt"), "No debe existir caché " + field.getName());
+            assertFalse(name.contains("invalidatedpao"), "No debe existir caché " + field.getName());
+        }
     }
 
     @Test
-    @DisplayName("El auto-registro por observacion cachea el id del alumno que funciono")
-    void observedSuccessfulCallRegistersTheStudentId() throws Exception {
+    @DisplayName("La derivación es estable entre peticiones y no necesita registro previo")
+    void observedSuccessfulCallRegistersTheStudentId() {
+        UtpPortalGatewayAdapter adapter = adapter(FakeHttpClient.always(200, "{}"));
         String token = TestTokens.validFor("U21200000");
 
-        method("rememberResolvedPaoUserId", String.class, String.class)
-                .invoke(adapter, token, "99999999-8888-7777-6666-555555555555");
+        String first = adapter.extractUserIdFromToken(token);
+        String second = adapter.extractUserIdFromToken(token);
 
-        Map<String, String> map = registry();
-        assertEquals("99999999-8888-7777-6666-555555555555", map.get("u21200000"));
-        assertFalse(map.containsKey("u99999999"), "No debe contaminar el registro de otro alumno");
+        assertEquals(first, second);
+        assertEquals(PaoUserIdDeriver.derive("U21200000@UTP.EDU.PE"), first);
+    }
+
+    @Test
+    @DisplayName("Checkpoint §19: un claim email con alias NO altera la semilla UPPER(codigo)@UTP.EDU.PE")
+    void emailAliasDoesNotChangeDerivation() {
+        String token = TestTokens.build("U23307609", 4102444800L,
+                Map.of("email", "alias.personal@gmail.com"));
+        String resolved = adapter(FakeHttpClient.always(200, "{}")).extractUserIdFromToken(token);
+
+        assertEquals("4e535263-79a0-5890-ae33-72a7aa0629ab", resolved);
     }
 
     @Test
     @DisplayName("Cada alumno resuelve su propia identidad: nunca se presta la de otro")
-    void studentsNeverShareTheirPaoIdentity() throws Exception {
-        method("registerPaoUserId", String.class, String.class)
-                .invoke(adapter, "U99999999", "id-de-alumno-a");
-        method("registerPaoUserId", String.class, String.class)
-                .invoke(adapter, "U21200000", "id-de-alumno-b");
+    void studentsNeverShareTheirPaoIdentity() {
+        UtpPortalGatewayAdapter adapter = adapter(FakeHttpClient.always(200, "{}"));
+        String idA = adapter.extractUserIdFromToken(TestTokens.validFor("U99999999"));
+        String idB = adapter.extractUserIdFromToken(TestTokens.validFor("U21200000"));
 
-        Map<String, String> map = registry();
-        assertEquals("id-de-alumno-a", map.get("u99999999"));
-        assertEquals("id-de-alumno-b", map.get("u21200000"));
-        assertEquals(2, map.size());
+        assertEquals(PaoUserIdDeriver.derive("U99999999@UTP.EDU.PE"), idA);
+        assertEquals(PaoUserIdDeriver.derive("U21200000@UTP.EDU.PE"), idB);
+        assertNotEquals(idA, idB);
     }
 
     @Test
-    @DisplayName("El intento de auto-descubrimiento se cachea por alumno (TTL) para no repetir sondas")
-    void discoveryAttemptsAreThrottledPerStudent() throws Exception {
-        String token = TestTokens.validFor("U99999999");
+    @DisplayName("Sin sondas HTTP: la resolución no consume peticiones de red")
+    void discoveryAttemptsAreThrottledPerStudent() {
+        FakeHttpClient client = FakeHttpClient.always(200, "{}");
+        UtpPortalGatewayAdapter adapter = adapter(client);
 
-        Method discover = method("discoverPaoUserId", String.class, String.class);
-        Field attemptsField = UtpPortalGatewayAdapter.class.getDeclaredField("paoDiscoveryAttempts");
-        attemptsField.setAccessible(true);
-        @SuppressWarnings("unchecked")
-        Map<String, Long> attempts = (Map<String, Long>) attemptsField.get(adapter);
-
-        // El descubrimiento se ejecuta (con sondas reales) pero deja constancia del intento.
-        discover.invoke(adapter, "U99999999", token);
-
-        assertNotNull(attempts.get("u99999999"), "Debe registrarse el intento de auto-descubrimiento");
+        assertDoesNotThrow(() -> adapter.extractUserIdFromToken(TestTokens.validFor("U99999999")));
+        assertTrue(client.requests().isEmpty(),
+                "La derivación UUIDv5 no debe ejecutar sondas HTTP (peticiones: " + client.requests().size() + ")");
     }
 }

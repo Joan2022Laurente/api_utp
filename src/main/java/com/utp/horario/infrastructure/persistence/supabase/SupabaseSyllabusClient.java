@@ -1,11 +1,11 @@
 package com.utp.horario.infrastructure.persistence.supabase;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.utp.horario.domain.model.Syllabus;
 import com.utp.horario.domain.model.SyllabusEvaluation;
 import com.utp.horario.domain.model.SyllabusWeeklySession;
+import com.utp.horario.domain.util.CourseNameNormalizer;
 import com.utp.horario.infrastructure.config.supabase.SupabaseProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -125,7 +125,7 @@ public class SupabaseSyllabusClient {
                 if (root.isArray() && !root.isEmpty()) {
                     Syllabus syllabus = selectBestMatch(root, clean);
                     if (syllabus != null) {
-                        log.info("[Supabase] 🎯 Sílabo encontrado en Supabase DB para curso: {} ({})", syllabus.getCourseName(), syllabus.getCourseCode());
+                        log.info("[Supabase] Sílabo encontrado en Supabase DB para curso: {} ({})", syllabus.getCourseName(), syllabus.getCourseCode());
                         recordSuccess();
                         return Optional.of(syllabus);
                     }
@@ -185,7 +185,7 @@ public class SupabaseSyllabusClient {
                 if (root.isArray() && !root.isEmpty()) {
                     Syllabus syllabus = selectBestMatch(root, clean);
                     if (syllabus != null) {
-                        log.info("[Supabase] 🎯 Sílabo encontrado en Supabase DB por nombre (sin distinguir mayúsculas): {} ({})",
+                        log.info("[Supabase] Sílabo encontrado en Supabase DB por nombre (sin distinguir mayúsculas): {} ({})",
                                 syllabus.getCourseName(), syllabus.getCourseCode());
                         return Optional.of(syllabus);
                     }
@@ -206,7 +206,7 @@ public class SupabaseSyllabusClient {
      * localmente con el nombre normalizado.</p>
      */
     private Optional<Syllabus> findByNormalizedCourseName(String clean) {
-        String target = normalizeCourseName(clean);
+        String target = CourseNameNormalizer.normalize(clean);
         if (target.isBlank()) {
             return Optional.empty();
         }
@@ -232,12 +232,12 @@ public class SupabaseSyllabusClient {
             }
             for (JsonNode row : rows) {
                 String storedName = row.path("course_name").asText("");
-                if (!storedName.isBlank() && normalizeCourseName(storedName).equals(target)) {
+                if (!storedName.isBlank() && CourseNameNormalizer.normalize(storedName).equals(target)) {
                     String courseCode = row.path("course_code").asText("");
                     if (!courseCode.isBlank()) {
                         Optional<Syllabus> resolved = findByCourseCode(courseCode);
                         if (resolved.isPresent()) {
-                            log.info("[Supabase] 🎯 Sílabo localizado por nombre normalizado (sin acentos): '{}' -> {}",
+                            log.info("[Supabase] Sílabo localizado por nombre normalizado (sin acentos): '{}' -> {}",
                                     clean, courseCode);
                             return resolved;
                         }
@@ -248,22 +248,6 @@ public class SupabaseSyllabusClient {
             log.debug("[Supabase] Búsqueda por nombre normalizado sin resultado para '{}': {}", clean, e.getMessage());
         }
         return Optional.empty();
-    }
-
-    /**
-     * Normaliza un nombre de curso para comparaciones: sin acentos, sin mayusculas y sin
-     * espacios redundantes.
-     */
-    static String normalizeCourseName(String name) {
-        if (name == null || name.isBlank()) {
-            return "";
-        }
-        String normalized = java.text.Normalizer.normalize(name, java.text.Normalizer.Form.NFD)
-                .replaceAll("\\p{M}", "")
-                .replaceAll("[^A-Za-z0-9]+", " ")
-                .trim()
-                .toLowerCase(java.util.Locale.ROOT);
-        return normalized;
     }
 
     /**
@@ -352,9 +336,10 @@ public class SupabaseSyllabusClient {
             payload.put("course_id", courseId);
             payload.put("course_code", syllabus.getCourseCode());
             payload.put("course_name", syllabus.getCourseName());
-            payload.put("credits", syllabus.getCredits() != null ? syllabus.getCredits() : 3);
-            payload.put("hours", syllabus.getWeeklyHours() != null ? (syllabus.getWeeklyHours() + "h") : "4h");
-            payload.put("modality", syllabus.getModality() != null ? syllabus.getModality() : "Presencial");
+            // Sin datos declarados por el PDF se persiste null: nunca créditos/horas/modalidad inventados.
+            payload.put("credits", syllabus.getCredits());
+            payload.put("hours", syllabus.getWeeklyHours() != null ? (syllabus.getWeeklyHours() + "h") : null);
+            payload.put("modality", syllabus.getModality());
             payload.put("formula", syllabus.getFormula());
             payload.put("learning_goal", syllabus.getLearningGoal());
             payload.put("evaluations", syllabus.getEvaluations() != null ? syllabus.getEvaluations() : List.of());
@@ -382,7 +367,7 @@ public class SupabaseSyllabusClient {
                 status = postPayload(url, reduced);
             }
             if (status == 200 || status == 201) {
-                log.info("[Supabase] 💾 Sílabo persistido exitosamente en Supabase DB para: {} ({})",
+                log.info("[Supabase] Sílabo persistido exitosamente en Supabase DB para: {} ({})",
                         syllabus.getCourseName(), syllabus.getCourseCode());
             } else {
                 log.warn("[Supabase] Respuesta no esperada al persistir {}: HTTP {}", courseId, status);

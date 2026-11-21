@@ -12,11 +12,14 @@ import java.util.Map;
  * Fábrica de tokens JWT de prueba para el realm Xpedition de Keycloak UTP.
  *
  * <p>Genera tokens con la misma estructura de claims que emite el SSO institucional
- * ({@code preferred_username}, {@code sub}, {@code name}, {@code email}, {@code exp}),
- * de modo que las pruebas puedan ejercitar el aislamiento de identidad y la validación
- * de vigencia sin depender del SSO real.</p>
+ * ({@code preferred_username}, {@code sub}, {@code name}, {@code email}, {@code tenantId},
+ * {@code exp}), de modo que las pruebas puedan ejercitar el aislamiento de identidad y la
+ * validación de vigencia sin depender del SSO real.</p>
  */
 public final class TestTokens {
+
+    /** Tenant de prueba declarado en el claim {@code tenantId} (nunca un fallback en producción). */
+    public static final String TEST_TENANT_ID = "11111111-1111-5111-8111-111111111111";
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final Base64.Encoder ENCODER = Base64.getUrlEncoder().withoutPadding();
@@ -40,6 +43,7 @@ public final class TestTokens {
         payload.put("sub", "sub-" + studentCode.toLowerCase());
         payload.put("name", "ESTUDIANTE " + studentCode);
         payload.put("email", studentCode.toLowerCase() + "@utp.edu.pe");
+        payload.put("tenantId", TEST_TENANT_ID);
         payload.put("iss", "https://sso.utp.edu.pe/auth/realms/Xpedition");
         payload.put("iat", Instant.now().getEpochSecond());
         payload.put("exp", expEpochSeconds);

@@ -14,8 +14,10 @@ import com.utp.horario.domain.model.SyllabusWeeklySession;
 import com.utp.horario.domain.port.in.SyllabusServicePort;
 import com.utp.horario.domain.port.out.SyllabusRepositoryPort;
 import com.utp.horario.domain.port.out.UtpPortalGatewayPort;
+import com.utp.horario.infrastructure.config.UtpProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -26,14 +28,7 @@ import java.util.Optional;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class SyllabusServiceImpl implements SyllabusServicePort {
-
-    /**
-     * Periodo academico consultado en el Portal UTP para la corroboracion oficial
-     * del sistema de evaluaciones (mismo periodo que usa el resto de la pasarela).
-     */
-    private static final String OFFICIAL_PERIOD_ID = "2263";
 
     private final SyllabusRepositoryPort syllabusRepositoryPort;
     private final UtpPortalGatewayPort utpPortalGatewayPort;
@@ -42,6 +37,43 @@ public class SyllabusServiceImpl implements SyllabusServicePort {
     private final SyllabusMarkdownExporter syllabusMarkdownExporter;
     private final SyllabusPdfToMarkdownSanitizer syllabusSanitizer;
     private final SyllabusDeterministicValidator syllabusValidator;
+    private final UtpProperties utpProperties;
+
+    @Autowired
+    public SyllabusServiceImpl(SyllabusRepositoryPort syllabusRepositoryPort,
+                               UtpPortalGatewayPort utpPortalGatewayPort,
+                               SyllabusParserEngine syllabusParserEngine,
+                               OpenRouterFleetService openRouterFleetService,
+                               SyllabusMarkdownExporter syllabusMarkdownExporter,
+                               SyllabusPdfToMarkdownSanitizer syllabusSanitizer,
+                               SyllabusDeterministicValidator syllabusValidator,
+                               UtpProperties utpProperties) {
+        this.syllabusRepositoryPort = syllabusRepositoryPort;
+        this.utpPortalGatewayPort = utpPortalGatewayPort;
+        this.syllabusParserEngine = syllabusParserEngine;
+        this.openRouterFleetService = openRouterFleetService;
+        this.syllabusMarkdownExporter = syllabusMarkdownExporter;
+        this.syllabusSanitizer = syllabusSanitizer;
+        this.syllabusValidator = syllabusValidator;
+        this.utpProperties = utpProperties != null ? utpProperties : new UtpProperties();
+    }
+
+    public SyllabusServiceImpl(SyllabusRepositoryPort syllabusRepositoryPort,
+                               UtpPortalGatewayPort utpPortalGatewayPort,
+                               SyllabusParserEngine syllabusParserEngine,
+                               OpenRouterFleetService openRouterFleetService,
+                               SyllabusMarkdownExporter syllabusMarkdownExporter,
+                               SyllabusPdfToMarkdownSanitizer syllabusSanitizer,
+                               SyllabusDeterministicValidator syllabusValidator) {
+        this(syllabusRepositoryPort, utpPortalGatewayPort, syllabusParserEngine, openRouterFleetService,
+             syllabusMarkdownExporter, syllabusSanitizer, syllabusValidator, new UtpProperties());
+    }
+
+    private String getOfficialPeriodId() {
+        return (utpProperties != null && utpProperties.getDefaultPeriodId() != null && !utpProperties.getDefaultPeriodId().isBlank())
+                ? utpProperties.getDefaultPeriodId()
+                : "2263";
+    }
 
     /**
      * Localiza el sílabo en la cache (Supabase + replica local).
@@ -127,7 +159,7 @@ public class SyllabusServiceImpl implements SyllabusServicePort {
         // 2) Seccion numerica del Portal -> resumen oficial de cursos.
         if (section.matches("^\\d{4,8}$")) {
             try {
-                CourseSummaryData summary = utpPortalGatewayPort.fetchCourseSummary(OFFICIAL_PERIOD_ID, token);
+                CourseSummaryData summary = utpPortalGatewayPort.fetchCourseSummary(getOfficialPeriodId(), token);
                 if (summary != null && summary.getCourses() != null) {
                     summary.getCourses().stream()
                             .filter(c -> section.equals(c.getSection()) || section.equals(c.getCourseId()))
@@ -163,7 +195,7 @@ public class SyllabusServiceImpl implements SyllabusServicePort {
                 .orElseGet(() -> {
                     String target = (pdfUrl != null && !pdfUrl.isBlank()) ? pdfUrl :
                                    (sectionId != null && !sectionId.isBlank()) ? sectionId : courseCode;
-                    log.info("[SyllabusServiceImpl] 🔍 Sílabo no encontrado en BD. Descargando y procesando PDF oficial para target='{}' (courseCode='{}')", target, courseCode);
+                    log.info("[SyllabusServiceImpl] Sílabo no encontrado en BD. Descargando y procesando PDF oficial para target='{}' (courseCode='{}')", target, courseCode);
                     
                     String pdfText = utpPortalGatewayPort.fetchSyllabusPdfText(token != null ? token : "", target);
                     if (pdfText != null && !pdfText.isBlank()) {
@@ -178,16 +210,16 @@ public class SyllabusServiceImpl implements SyllabusServicePort {
                             Syllabus candidate = aiParsed.get();
                             SyllabusDeterministicValidator.ValidationResult valResult = syllabusValidator.validate(candidate);
                             if (valResult.isValid()) {
-                                log.info("[SyllabusServiceImpl] ✨ Sílabo estructurado por IA validado exitosamente para {}. Guardando en Base de Datos...", courseCode);
+                                log.info("[SyllabusServiceImpl] Sílabo estructurado por IA validado exitosamente para {}. Guardando en Base de Datos...", courseCode);
                                 return syllabusRepositoryPort.save(candidate);
                             } else {
-                                log.warn("[SyllabusServiceImpl] ⚠️ Sílabo de IA rechazado por filtros deterministas para {} (Violaciones: {}). Activando fallback...",
+                                log.warn("[SyllabusServiceImpl] Sílabo de IA rechazado por filtros deterministas para {} (Violaciones: {}). Activando fallback...",
                                         courseCode, valResult.getViolations());
                             }
                         }
 
                         // 3. Fallback determinista con Regex Parser Engine
-                        log.info("[SyllabusServiceImpl] ⚙️ Usando motor determinista Regex para parsear sílabo de {}", courseCode);
+                        log.info("[SyllabusServiceImpl] Usando motor determinista Regex para parsear sílabo de {}", courseCode);
                         Syllabus parsed = syllabusParserEngine.parse(pdfText, courseCode);
                         SyllabusDeterministicValidator.ValidationResult regexVal = syllabusValidator.validate(parsed);
                         if (regexVal.isValid()) {
@@ -203,7 +235,7 @@ public class SyllabusServiceImpl implements SyllabusServicePort {
                         if (official != null) {
                             SyllabusDeterministicValidator.ValidationResult officialVal = syllabusValidator.validate(official);
                             if (officialVal.isValid()) {
-                                log.info("[SyllabusServiceImpl] 🏛️ Sílabo reconstruido con el sistema de evaluaciones oficial del Portal UTP para {}",
+                                log.info("[SyllabusServiceImpl] Sílabo reconstruido con el sistema de evaluaciones oficial del Portal UTP para {}",
                                         courseCode);
                                 return syllabusRepositoryPort.save(official);
                             }
@@ -276,7 +308,7 @@ public class SyllabusServiceImpl implements SyllabusServicePort {
             return null;
         }
         try {
-            CourseSummaryData summary = utpPortalGatewayPort.fetchCourseSummary(OFFICIAL_PERIOD_ID, token);
+            CourseSummaryData summary = utpPortalGatewayPort.fetchCourseSummary(getOfficialPeriodId(), token);
             if (summary == null || summary.getCourses() == null || summary.getCourses().isEmpty()) {
                 return null;
             }
@@ -401,7 +433,7 @@ public class SyllabusServiceImpl implements SyllabusServicePort {
         if (!valResult.isValid()) {
             throw new IllegalArgumentException("El sílabo no cumple con las reglas deterministas de calidad: " + valResult.getViolations());
         }
-        log.info("[SyllabusServiceImpl] 💾 Guardando sílabo validado en base de datos para curso: {} ({})", 
+        log.info("[SyllabusServiceImpl] Guardando sílabo validado en base de datos para curso: {} ({})", 
                 syllabus.getCourseName(), syllabus.getCourseCode());
         return syllabusRepositoryPort.save(syllabus);
     }

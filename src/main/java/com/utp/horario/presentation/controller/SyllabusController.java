@@ -7,14 +7,13 @@ import com.utp.horario.domain.model.ScheduleInterval;
 import com.utp.horario.domain.model.Syllabus;
 import com.utp.horario.domain.port.in.ScheduleServicePort;
 import com.utp.horario.domain.port.in.SyllabusServicePort;
+import com.utp.horario.domain.util.CourseNameNormalizer;
 import com.utp.horario.presentation.dto.ApiResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -64,18 +63,22 @@ public class SyllabusController {
      */
     @GetMapping
     public ResponseEntity<ApiResponse<List<Syllabus>>> getAllSyllabi(
-            @RequestParam(defaultValue = "current-student") String studentId,
+            @Parameter(description = "Identificador opcional del estudiante (en peticiones con token se deriva del JWT)", example = "current-student")
+            @RequestParam(required = false) String studentId,
+            @Parameter(description = "Alcance del catálogo: 'all' (todos los sílabos) o 'student' (filtrado por matrícula del estudiante)", example = "all")
             @RequestParam(defaultValue = "all") String scope,
-            @RequestParam(defaultValue = "2026 - Ciclo 2 Agosto") String period,
+            @Parameter(description = "Periodo académico (ej. 2026 - Ciclo 2 Agosto). Si se omite, se usa el configurado.")
+            @RequestParam(required = false) String period,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
-        List<Syllabus> list = syllabusServicePort.getAllSyllabiForStudent(studentId);
+        String effectiveStudentId = (studentId != null && !studentId.isBlank()) ? studentId : "current-student";
+        List<Syllabus> list = syllabusServicePort.getAllSyllabiForStudent(effectiveStudentId);
 
         if ("student".equalsIgnoreCase(scope)) {
             String token = SessionTokenInspector.extractBearerToken(authHeader);
             if (token == null) {
                 return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP con formato 'Bearer <token>' para filtrar por estudiante"));
             }
-            List<Course> enrolled = enrolledCourses(studentId, period, token);
+            List<Course> enrolled = enrolledCourses(effectiveStudentId, period != null ? period : "", token);
             Set<String> enrolledCodes = enrolledCodes(enrolled);
             Set<String> enrolledNames = enrolledNames(enrolled);
             List<Syllabus> filtered = list.stream()
@@ -106,7 +109,7 @@ public class SyllabusController {
             return true;
         }
         String name = syllabus.getCourseName();
-        return name != null && enrolledNames.contains(normalizeCourseName(name));
+        return name != null && enrolledNames.contains(CourseNameNormalizer.normalize(name));
     }
 
     /**
@@ -127,7 +130,7 @@ public class SyllabusController {
         return courses.stream()
                 .map(Course::getName)
                 .filter(name -> name != null && !name.isBlank())
-                .map(this::normalizeCourseName)
+                .map(CourseNameNormalizer::normalize)
                 .collect(Collectors.toSet());
     }
 
@@ -141,19 +144,6 @@ public class SyllabusController {
         }
         return schedule.getCourses();
     }
-
-    /**
-     * Normaliza un nombre de curso para comparar: sin acentos, en mayusculas y sin espacios
-     * redundantes.
-     */
-    private String normalizeCourseName(String name) {
-        return java.text.Normalizer.normalize(name, java.text.Normalizer.Form.NFD)
-                .replaceAll("\\p{M}", "")
-                .replaceAll("[^A-Za-z0-9]+", " ")
-                .trim()
-                .toUpperCase(java.util.Locale.ROOT);
-    }
-
 
     /**
      * Extrae un Bearer opcional. Si el cliente envía una cabecera, debe ser un JWT Bearer
@@ -202,16 +192,5 @@ public class SyllabusController {
         return ResponseEntity.ok()
                 .header(org.springframework.http.HttpHeaders.CONTENT_TYPE, "text/markdown; charset=utf-8")
                 .body(markdown);
-    }
-
-    @Operation(summary = "Obtener sílabo en formato Markdown mediante query params", description = "Permite consultar el sílabo en Markdown pasando el código de curso como parámetro ?courseCode=...")
-    @GetMapping(value = "/markdown", produces = "text/markdown; charset=utf-8")
-    public ResponseEntity<String> getMarkdownByParam(
-            @RequestParam String courseCode,
-            @RequestParam(required = false) String sectionId,
-            @RequestParam(required = false) String pdfUrl,
-            @RequestParam(required = false, defaultValue = "false") boolean preferRaw,
-            @RequestHeader(value = "Authorization", required = false) String authHeader) {
-        return getSyllabusMarkdown(courseCode, sectionId, pdfUrl, preferRaw, authHeader);
     }
 }

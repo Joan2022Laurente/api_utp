@@ -101,7 +101,7 @@ class AcademicTaskServiceTest {
 
         AcademicActivity ev1 = AcademicActivity.builder()
                 .id("ev-1")
-                .title("🔴 (AC-S07-AP2) - Avance portafolio 02")
+                .title("(AC-S07-AP2) - Avance portafolio 02")
                 .evaluationSystem("AVANCE DE PORTAFOLIO 2")
                 .finishAt(future1.format(fmt))
                 .courseName("HERRAMIENTAS PARA LA COMUNICACIÓN EFECTIVA")

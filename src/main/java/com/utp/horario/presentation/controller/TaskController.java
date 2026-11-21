@@ -48,8 +48,8 @@ public class TaskController {
     @Operation(summary = "Consultar calendario unificado de actividades del ciclo", description = "Obtiene todas las actividades (foros, tareas, prácticas) programadas en el periodo con sus estados, fechas de entrega y filtros opcionales.")
     @GetMapping("/activities")
     public ResponseEntity<ApiResponse<List<AcademicActivity>>> getCalendarActivities(
-            @Parameter(description = "Fecha base para consulta (yyyy-MM-dd+00:00:00)")
-            @RequestParam(required = false, defaultValue = "2026-09-21+00:00:00") String dateToQuery,
+            @Parameter(description = "Fecha base para consulta (yyyy-MM-dd+00:00:00). Si se omite, se calcula dinámicamente la fecha actual.")
+            @RequestParam(required = false) String dateToQuery,
             @Parameter(description = "Modo de intervalo ('period', 'week', 'day')")
             @RequestParam(required = false, defaultValue = "period") String intervalMode,
             @Parameter(description = "Filtrar por número de semana académica (ej. 7)")

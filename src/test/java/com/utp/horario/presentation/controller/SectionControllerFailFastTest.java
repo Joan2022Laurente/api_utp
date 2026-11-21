@@ -64,16 +64,4 @@ class SectionControllerFailFastTest {
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.unities[0].themes[0].weekNumber").value(3));
     }
-
-    @Test
-    @DisplayName("La ruta retrocompatible /tasks/sections/{sectionId}/full también responde 200")
-    void legacyAliasResponds200() throws Exception {
-        when(academicTaskServicePort.getSectionFull(anyString(), anyString()))
-                .thenReturn(new ObjectMapper().readTree("{\"unities\":[]}"));
-
-        mockMvc.perform(get("/tasks/sections/seccion-dinamica-123/full")
-                        .header("Authorization", "Bearer " + TestTokens.validFor("U23307609")))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.success").value(true));
-    }
 }

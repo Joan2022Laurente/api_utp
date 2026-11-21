@@ -14,7 +14,6 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
@@ -73,7 +72,7 @@ public class OpenRouterModelSelector {
             if (!discovered.isEmpty()) {
                 cachedRankedModels = discovered;
                 lastFetchedAt = now;
-                log.info("[OpenRouterModelSelector] 🚀 {} modelos gratuitos rankeados dinámicamente: Top 3 -> {}", 
+                log.info("[OpenRouterModelSelector] {} modelos gratuitos rankeados dinámicamente: Top 3 -> {}", 
                         discovered.size(), slice(discovered, 3));
                 return slice(discovered, limit);
             }

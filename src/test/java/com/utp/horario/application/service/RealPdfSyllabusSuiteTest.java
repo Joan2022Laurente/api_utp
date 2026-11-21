@@ -1,18 +1,13 @@
 package com.utp.horario.application.service;
 
-import com.utp.horario.application.service.pdf.PdfLayoutLine;
-import com.utp.horario.application.service.pdf.PdfSpatialLayoutExtractor;
+import com.utp.horario.application.service.validation.SyllabusDeterministicValidator;
 import com.utp.horario.domain.model.Syllabus;
 import com.utp.horario.domain.model.SyllabusEvaluation;
 import com.utp.horario.domain.model.SyllabusWeeklySession;
-import org.apache.pdfbox.Loader;
-import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.text.PDFTextStripper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -23,16 +18,24 @@ import static org.junit.jupiter.api.Assertions.*;
 public class RealPdfSyllabusSuiteTest {
 
     private SyllabusParserEngine parserEngine;
-    private static final String SAMPLES_DIR = "../labs/silabos ejemplos";
+    private SyllabusDeterministicValidator validator;
+    private static final String SAMPLES_DIR = "src/test/resources/silabos";
 
     @BeforeEach
     void setUp() {
         parserEngine = new SyllabusParserEngine();
+        validator = new SyllabusDeterministicValidator();
     }
 
     private Syllabus parseLocalPdf(String fileName) throws Exception {
         Path path = Paths.get(SAMPLES_DIR, fileName).toAbsolutePath().normalize();
-        org.junit.jupiter.api.Assumptions.assumeTrue(Files.exists(path), "El archivo PDF debe existir para ejecutar esta prueba: " + path);
+        if (!Files.exists(path)) {
+            var res = getClass().getClassLoader().getResource("silabos/" + fileName);
+            if (res != null) {
+                path = Paths.get(res.toURI());
+            }
+        }
+        assertTrue(Files.exists(path), "El archivo PDF oficial debe existir en test resources: " + path);
 
         byte[] bytes = Files.readAllBytes(path);
         return parserEngine.parsePdf(bytes, fileName);
@@ -53,7 +56,7 @@ public class RealPdfSyllabusSuiteTest {
         }
         System.out.println("TOTAL PONDERACIÓN: " + totalWeight + "%");
         System.out.println("--------------------------------------------------------------------------------");
-        System.out.println("CRONOGRAMA (18 SEMANAS):");
+        System.out.println("CRONOGRAMA (" + s.getWeeklySchedule().size() + " SEMANAS REALES):");
         for (SyllabusWeeklySession w : s.getWeeklySchedule()) {
             String eval = (w.getEvaluation() != null) ? "[" + w.getEvaluation() + "]" : "    ";
             System.out.println(String.format("  Sem %-2d %-6s | %s", w.getWeek(), eval, w.getTopic()));
@@ -64,46 +67,59 @@ public class RealPdfSyllabusSuiteTest {
     @Test
     @DisplayName("Golden Test: Desarrollo Web Integrado (1 sesión/semana)")
     void testDesarrolloWebIntegrado() throws Exception {
-        Syllabus s = parseLocalPdf("DESARROLLOWEBINTEGRADO_undefined (1).pdf");
+        Syllabus s = parseLocalPdf("100000ST61_DesarrolloWebIntegrado.pdf");
         printSyllabusSummary(s);
 
         assertNotNull(s);
-        assertTrue(s.getCourseName().toUpperCase().contains("DESARROLLO WEB"));
+        assertEquals("100000ST61", s.getCourseCode());
+        assertTrue(s.getCourseName().toUpperCase().contains("DESARROLLO WEB INTEGRADO"));
         assertEquals(2, s.getCredits(), "Desarrollo Web Integrado oficial es de 2 créditos");
-        assertFalse(s.getEvaluations().isEmpty());
-        assertEquals(18, s.getWeeklySchedule().size());
+        assertEquals("Presencial", s.getModality());
+        assertEquals(3, s.getWeeklyHours());
+        assertEquals(17, s.getWeeklySchedule().size(), "Semanas reales extraídas del PDF sin relleno sintético");
 
-        // Validar que la suma de pesos sea 100%
-        int sum = s.getEvaluations().stream().mapToInt(SyllabusEvaluation::getWeightPercent).sum();
-        assertEquals(100, sum, "La suma de ponderaciones debe ser 100%");
+        // Evaluaciones declaradas en el PDF
+        assertEquals(4, s.getEvaluations().size());
+        assertEquals(100, s.getEvaluations().stream().mapToInt(SyllabusEvaluation::getWeightPercent).sum());
+
+        SyllabusEvaluation apf1 = s.getEvaluations().stream().filter(e -> "APF1".equals(e.getType())).findFirst().orElseThrow();
+        assertEquals(5, apf1.getWeek());
+        assertEquals(20, apf1.getWeightPercent());
+
+        SyllabusEvaluation apf2 = s.getEvaluations().stream().filter(e -> "APF2".equals(e.getType())).findFirst().orElseThrow();
+        assertEquals(10, apf2.getWeek());
+        assertEquals(20, apf2.getWeightPercent());
+
+        SyllabusEvaluation apf3 = s.getEvaluations().stream().filter(e -> "APF3".equals(e.getType())).findFirst().orElseThrow();
+        assertEquals(15, apf3.getWeek());
+        assertEquals(20, apf3.getWeightPercent());
+
+        SyllabusEvaluation proy = s.getEvaluations().stream().filter(e -> "PROY".equals(e.getType())).findFirst().orElseThrow();
+        assertEquals(18, proy.getWeek());
+        assertEquals(40, proy.getWeightPercent());
+
+        // Deterministic quality gate
+        SyllabusDeterministicValidator.ValidationResult result = validator.validate(s);
+        assertTrue(result.isValid(), "Debe pasar la validación determinista sin violaciones: " + result.getViolations());
     }
 
     @Test
     @DisplayName("Golden Test: Formación para la Investigación - Sistemas (Evaluaciones multilínea)")
     void testFormacionParaLaInvestigacion() throws Exception {
-        Path path = Paths.get(SAMPLES_DIR, "FORMACIÓNPARALAINVESTIGACIÓN-SISTEMAS_undefined (3).pdf").toAbsolutePath().normalize();
-        org.junit.jupiter.api.Assumptions.assumeTrue(Files.exists(path), "El archivo PDF debe existir para ejecutar esta prueba: " + path);
-        byte[] bytes = Files.readAllBytes(path);
-        try (PDDocument doc = Loader.loadPDF(bytes)) {
-            PDFTextStripper stripper = new PDFTextStripper();
-            stripper.setSortByPosition(true);
-            String rawText = stripper.getText(doc);
-            int idx = rawText.indexOf("7. SISTEMA DE EVALUACIÓN");
-            int endIdx = rawText.indexOf("8. FUENTES", idx);
-            if (idx >= 0 && endIdx > idx) {
-                System.out.println(">>> RAW EVALUATION BLOCK FOR FORMACION:\n" + rawText.substring(idx, endIdx));
-            }
-        }
-
-        Syllabus s = parseLocalPdf("FORMACIÓNPARALAINVESTIGACIÓN-SISTEMAS_undefined (3).pdf");
+        Syllabus s = parseLocalPdf("100000SI82_FormacionParaLaInvestigacion.pdf");
         printSyllabusSummary(s);
 
         assertNotNull(s);
-        assertTrue(s.getCourseName().toUpperCase().contains("INVESTIGACI"));
-        assertEquals(5, s.getEvaluations().size());
-        assertEquals(18, s.getWeeklySchedule().size());
+        assertEquals("100000SI82", s.getCourseCode());
+        assertTrue(s.getCourseName().toUpperCase().contains("FORMACIÓN PARA LA INVESTIGACIÓN"));
+        assertEquals(4, s.getCredits());
+        assertEquals("Virtual en vivo", s.getModality());
+        assertEquals(4, s.getWeeklyHours());
+        assertEquals(15, s.getWeeklySchedule().size(), "Semanas reales extraídas del PDF sin relleno sintético");
 
-        // Validar semanas exactas de evaluaciones
+        assertEquals(5, s.getEvaluations().size());
+        assertEquals(100, s.getEvaluations().stream().mapToInt(SyllabusEvaluation::getWeightPercent).sum());
+
         SyllabusEvaluation ati1 = s.getEvaluations().stream().filter(e -> "ATI1".equals(e.getType())).findFirst().orElseThrow();
         assertEquals(4, ati1.getWeek());
         assertEquals(10, ati1.getWeightPercent());
@@ -124,63 +140,118 @@ public class RealPdfSyllabusSuiteTest {
         assertEquals(18, ti.getWeek());
         assertEquals(30, ti.getWeightPercent());
 
-        int sum = s.getEvaluations().stream().mapToInt(SyllabusEvaluation::getWeightPercent).sum();
-        assertEquals(100, sum);
+        SyllabusDeterministicValidator.ValidationResult result = validator.validate(s);
+        assertTrue(result.isValid(), "Debe pasar la validación determinista sin violaciones: " + result.getViolations());
     }
 
     @Test
-    @DisplayName("Golden Test: Gestión del Servicio TI (2 sesiones/semana, 36 sesiones)")
+    @DisplayName("Golden Test: Gestión del Servicio TI (2 sesiones/semana, cronograma con números)")
     void testGestionDelServicioTi() throws Exception {
-        Syllabus s = parseLocalPdf("GESTIÓNDELSERVICIOTI_undefined (1).pdf");
+        Syllabus s = parseLocalPdf("100000S74T_GestionDelServicioTi.pdf");
         printSyllabusSummary(s);
 
         assertNotNull(s);
-        assertTrue(s.getCourseName().toUpperCase().contains("GESTI"));
-        assertEquals(18, s.getWeeklySchedule().size());
+        assertEquals("100000S74T", s.getCourseCode());
+        assertTrue(s.getCourseName().toUpperCase().contains("GESTIÓN DEL SERVICIO TI"));
+        assertEquals(3, s.getCredits());
+        assertEquals("Virtual en vivo", s.getModality());
+        assertEquals(4, s.getWeeklyHours());
+        assertEquals(17, s.getWeeklySchedule().size(), "Semanas reales extraídas del PDF sin relleno sintético");
 
-        int sum = s.getEvaluations().stream().mapToInt(SyllabusEvaluation::getWeightPercent).sum();
-        assertEquals(100, sum);
+        assertEquals(4, s.getEvaluations().size());
+        assertEquals(100, s.getEvaluations().stream().mapToInt(SyllabusEvaluation::getWeightPercent).sum());
+
+        SyllabusEvaluation pc1 = s.getEvaluations().stream().filter(e -> "PC1".equals(e.getType())).findFirst().orElseThrow();
+        assertEquals(6, pc1.getWeek());
+        assertEquals(25, pc1.getWeightPercent());
+
+        SyllabusEvaluation pc2 = s.getEvaluations().stream().filter(e -> "PC2".equals(e.getType())).findFirst().orElseThrow();
+        assertEquals(14, pc2.getWeek());
+        assertEquals(25, pc2.getWeightPercent());
+
+        SyllabusEvaluation pa = s.getEvaluations().stream().filter(e -> "PA".equals(e.getType())).findFirst().orElseThrow();
+        assertEquals(17, pa.getWeek());
+        assertEquals(10, pa.getWeightPercent());
+
+        SyllabusEvaluation proy = s.getEvaluations().stream().filter(e -> "PROY".equals(e.getType())).findFirst().orElseThrow();
+        assertEquals(18, proy.getWeek());
+        assertEquals(40, proy.getWeightPercent());
+
+        SyllabusDeterministicValidator.ValidationResult result = validator.validate(s);
+        assertTrue(result.isValid(), "Debe pasar la validación determinista sin violaciones: " + result.getViolations());
     }
 
     @Test
-    @DisplayName("Golden Test: Herramientas para la Comunicación Efectiva (Virtual)")
-    void testHerramientasComunicacionEfectiva() throws Exception {
-        Syllabus s = parseLocalPdf("HERRAMIENTASPARALACOMUNICACIÓNEFECTIVA_undefined.pdf");
-        printSyllabusSummary(s);
-
-        assertNotNull(s);
-        assertTrue(s.getCourseName().toUpperCase().contains("COMUNICACI"));
-        assertEquals(18, s.getWeeklySchedule().size());
-
-        int sum = s.getEvaluations().stream().mapToInt(SyllabusEvaluation::getWeightPercent).sum();
-        assertEquals(100, sum);
-    }
-
-    @Test
-    @DisplayName("Golden Test: Lenguajes de Programación (2 sesiones/semana)")
+    @DisplayName("Golden Test: Lenguajes de Programación (cronograma sin semana 18 explicita)")
     void testLenguajesDeProgramacion() throws Exception {
-        Syllabus s = parseLocalPdf("LENGUAJESDEPROGRAMACIÓN_undefined (1).pdf");
+        Syllabus s = parseLocalPdf("100000SI68_LenguajesDeProgramacion.pdf");
         printSyllabusSummary(s);
 
         assertNotNull(s);
-        assertTrue(s.getCourseName().toUpperCase().contains("LENGUAJES"));
-        assertEquals(18, s.getWeeklySchedule().size());
+        assertEquals("100000SI68", s.getCourseCode());
+        assertTrue(s.getCourseName().toUpperCase().contains("LENGUAJES DE PROGRAMACIÓN"));
+        assertEquals(2, s.getCredits());
+        assertEquals("Presencial", s.getModality());
+        assertEquals(2, s.getWeeklyHours());
+        assertEquals(16, s.getWeeklySchedule().size(), "Semanas reales extraídas del PDF sin relleno sintético");
 
-        int sum = s.getEvaluations().stream().mapToInt(SyllabusEvaluation::getWeightPercent).sum();
-        assertEquals(100, sum);
+        assertEquals(4, s.getEvaluations().size());
+        assertEquals(100, s.getEvaluations().stream().mapToInt(SyllabusEvaluation::getWeightPercent).sum());
+
+        SyllabusEvaluation pc1 = s.getEvaluations().stream().filter(e -> "PC1".equals(e.getType())).findFirst().orElseThrow();
+        assertEquals(5, pc1.getWeek());
+        assertEquals(25, pc1.getWeightPercent());
+
+        SyllabusEvaluation pc2 = s.getEvaluations().stream().filter(e -> "PC2".equals(e.getType())).findFirst().orElseThrow();
+        assertEquals(10, pc2.getWeek());
+        assertEquals(25, pc2.getWeightPercent());
+
+        SyllabusEvaluation pa = s.getEvaluations().stream().filter(e -> "PA".equals(e.getType())).findFirst().orElseThrow();
+        assertEquals(17, pa.getWeek());
+        assertEquals(10, pa.getWeightPercent());
+
+        SyllabusEvaluation proy = s.getEvaluations().stream().filter(e -> "PROY".equals(e.getType())).findFirst().orElseThrow();
+        assertEquals(18, proy.getWeek());
+        assertEquals(40, proy.getWeightPercent());
+
+        SyllabusDeterministicValidator.ValidationResult result = validator.validate(s);
+        assertTrue(result.isValid(), "Debe pasar la validación determinista sin violaciones: " + result.getViolations());
     }
 
     @Test
-    @DisplayName("Golden Test: Servicios Cloud (2 sesiones/semana, 36 sesiones)")
+    @DisplayName("Golden Test: Servicios Cloud (2 sesiones/semana, 34 sesiones)")
     void testServiciosCloud() throws Exception {
-        Syllabus s = parseLocalPdf("SERVICIOSCLOUD_undefined (2).pdf");
+        Syllabus s = parseLocalPdf("100000SI97_ServiciosCloud.pdf");
         printSyllabusSummary(s);
 
         assertNotNull(s);
-        assertTrue(s.getCourseName().toUpperCase().contains("CLOUD"));
-        assertEquals(18, s.getWeeklySchedule().size());
+        assertEquals("100000SI97", s.getCourseCode());
+        assertTrue(s.getCourseName().toUpperCase().contains("SERVICIOS CLOUD"));
+        assertEquals(3, s.getCredits());
+        assertEquals("Presencial", s.getModality());
+        assertEquals(4, s.getWeeklyHours());
+        assertEquals(17, s.getWeeklySchedule().size(), "Semanas reales extraídas del PDF sin relleno sintético");
 
-        int sum = s.getEvaluations().stream().mapToInt(SyllabusEvaluation::getWeightPercent).sum();
-        assertEquals(100, sum);
+        assertEquals(4, s.getEvaluations().size());
+        assertEquals(100, s.getEvaluations().stream().mapToInt(SyllabusEvaluation::getWeightPercent).sum());
+
+        SyllabusEvaluation pc1 = s.getEvaluations().stream().filter(e -> "PC1".equals(e.getType())).findFirst().orElseThrow();
+        assertEquals(3, pc1.getWeek());
+        assertEquals(25, pc1.getWeightPercent());
+
+        SyllabusEvaluation pc2 = s.getEvaluations().stream().filter(e -> "PC2".equals(e.getType())).findFirst().orElseThrow();
+        assertEquals(12, pc2.getWeek());
+        assertEquals(25, pc2.getWeightPercent());
+
+        SyllabusEvaluation pa = s.getEvaluations().stream().filter(e -> "PA".equals(e.getType())).findFirst().orElseThrow();
+        assertEquals(17, pa.getWeek());
+        assertEquals(10, pa.getWeightPercent());
+
+        SyllabusEvaluation proy = s.getEvaluations().stream().filter(e -> "PROY".equals(e.getType())).findFirst().orElseThrow();
+        assertEquals(18, proy.getWeek());
+        assertEquals(40, proy.getWeightPercent());
+
+        SyllabusDeterministicValidator.ValidationResult result = validator.validate(s);
+        assertTrue(result.isValid(), "Debe pasar la validación determinista sin violaciones: " + result.getViolations());
     }
 }

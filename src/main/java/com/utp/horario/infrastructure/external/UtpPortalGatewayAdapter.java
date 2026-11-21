@@ -13,11 +13,13 @@ import com.utp.horario.domain.model.ModalityType;
 import com.utp.horario.domain.model.RubricCriterion;
 import com.utp.horario.domain.model.RubricLevel;
 import com.utp.horario.domain.model.ScheduleInterval;
+import com.utp.horario.domain.model.ScheduleItemParsingResult;
 import com.utp.horario.domain.model.StudentProfile;
 import com.utp.horario.domain.model.TaskSpecification;
 import com.utp.horario.domain.port.out.UtpPortalGatewayPort;
+import com.utp.horario.domain.util.CourseNameNormalizer;
+import com.utp.horario.infrastructure.external.schedule.ScheduleItemParser;
 import jakarta.annotation.PostConstruct;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -30,15 +32,13 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Base64;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -56,37 +56,8 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
     private final ObjectMapper objectMapper;
     private final Map<String, String> buildingCache = new ConcurrentHashMap<>();
 
-    /**
-     * Mapa de correspondencia PAO (userId) por código de alumno.
-     *
-     * <p>Se puebla únicamente desde configuración externa (variables de entorno / properties).
-     * Nunca se versiona información personal de estudiantes dentro del código fuente.</p>
-     */
-    private final Map<String, String> studentPaoUserMap = new ConcurrentHashMap<>();
-
-    /**
-     * Identificadores PAO derivados de forma determinista (uuidv5 sobre el correo).
-     *
-     * <p>Se mantienen SEPARADOS de la configuracion explicita: un valor derivado jamas debe
-     * prevalecer sobre una configuracion del operador, pero tampoco al reves (un valor
-     * obsoleto en cache no puede invalidar una derivacion valida).</p>
-     */
-    private final Map<String, String> derivedPaoUserMap = new ConcurrentHashMap<>();
-
-    /**
-     * Identificadores derivados que PAO ha rechazado, por alumno.
-     * Permite pasar automaticamente a la siguiente variante si la plataforma cambiase
-     * su namespace de generacion.
-     */
-    private final Map<String, Set<String>> invalidatedPaoIds = new ConcurrentHashMap<>();
-
-    /**
-     * Marca temporal del ultimo intento de auto-descubrimiento por alumno.
-     * Evita repetir sondas HTTP contra PAO dentro de la ventana de TTL.
-     */
-    private final Map<String, Long> paoDiscoveryAttempts = new ConcurrentHashMap<>();
-
-    private static final long PAO_DISCOVERY_TTL_MILLIS = 30 * 60 * 1000L;
+    // Identidad 100% determinista (RFC 4122 UUIDv5): sin cachés en memoria, sin sondas HTTP
+    // y sin ficheros en disco (el filesystem de Heroku es efímero).
 
     private static final Pattern EVAL_PATTERN = Pattern.compile("(?i)(PC\\d*|AP\\d*|EC\\d*|TI\\d*|EP|EF|EXFN|EXPA|PROY|AVANCE|PORTAFOLIO|PARTICIPACI[OÓ]N|EXAMEN)");
 
@@ -107,18 +78,38 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         this.objectMapper = new ObjectMapper();
     }
 
-    /**
-     * Correspondencia PAO inyectada por Spring ({@code utp.pao-user-map}).
-     * Fallback por variable de entorno: {@code UTP_PAO_USER_MAP}.
-     */
-    @Value("${utp.pao-user-map:}")
-    private String paoUserMapProperty;
-
     @Value("${utp.portal-url:https://api-portal.utpxpedition.com/graphql}")
     private String portalUrl;
 
     @Value("${utp.pao-base-url:https://api-pao.utpxpedition.com}")
     private String paoBaseUrl;
+
+    @Value("${utp.default-period-id:2263}")
+    private String defaultPeriodId;
+
+    @Value("${utp.default-period-name:2026 - Ciclo 2 Agosto}")
+    private String defaultPeriodName;
+
+    @Value("${utp.default-period-start-date:2026-08-10}")
+    private String defaultPeriodStartDate;
+
+    public String getDefaultPeriodId() {
+        return (defaultPeriodId != null && !defaultPeriodId.isBlank()) ? defaultPeriodId : "2263";
+    }
+
+    public String getDefaultPeriodName() {
+        return (defaultPeriodName != null && !defaultPeriodName.isBlank()) ? defaultPeriodName : "2026 - Ciclo 2 Agosto";
+    }
+
+    public LocalDate getDefaultPeriodStartDate() {
+        try {
+            return (defaultPeriodStartDate != null && !defaultPeriodStartDate.isBlank())
+                    ? LocalDate.parse(defaultPeriodStartDate.trim())
+                    : LocalDate.of(2026, 8, 10);
+        } catch (Exception e) {
+            return LocalDate.of(2026, 8, 10);
+        }
+    }
 
     private String getPortalEndpoint() {
         return (portalUrl != null && !portalUrl.isBlank()) ? portalUrl : "https://api-portal.utpxpedition.com/graphql";
@@ -134,6 +125,79 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         return base + subpath;
     }
 
+    public record AcademicPeriodInfo(String id, String code, String name, boolean isCurrent, LocalDate startDate, LocalDate endDate) {}
+
+    /**
+     * Resuelve el periodo académico activo en tiempo real desde la API oficial de PAO
+     * (Checkpoint §4.1: /course/student/{userId}/academicperiods).
+     */
+    public AcademicPeriodInfo resolveCurrentAcademicPeriod(String token) {
+        String effectiveToken = (token != null && token.startsWith("Bearer ")) ? token.substring(7).trim() : token;
+        if (effectiveToken == null || effectiveToken.isBlank()) {
+            return new AcademicPeriodInfo(getDefaultPeriodId(), "2026-2", getDefaultPeriodName(), true, getDefaultPeriodStartDate(), getDefaultPeriodStartDate().plusWeeks(18));
+        }
+        try {
+            String userId = extractUserIdFromToken(effectiveToken);
+            String tenantId = extractTenantIdFromToken(effectiveToken);
+            String url = getPaoEndpoint("/course/student/" + userId + "/academicperiods");
+
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(10))
+                    .header("accept", "*/*")
+                    .header("authorization", "Bearer " + effectiveToken)
+                    .header("user-id", userId)
+                    .header("user-role", "STUDENT")
+                    .header("x-tenant-id", tenantId)
+                    .header("origin", "https://class.utp.edu.pe")
+                    .header("referer", "https://class.utp.edu.pe/")
+                    .header("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                    .header("transaction-id", java.util.UUID.randomUUID().toString())
+                    .GET()
+                    .build();
+
+            HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() == 200) {
+                JsonNode array = objectMapper.readTree(resp.body());
+                if (array.isArray()) {
+                    for (JsonNode node : array) {
+                        if (node.path("isCurrent").asBoolean(false)) {
+                            String id = node.path("id").asText();
+                            String code = node.path("code").asText();
+                            String name = node.path("name").asText();
+                            String startStr = node.path("startDate").asText();
+                            String endStr = node.path("endDate").asText();
+                            LocalDate start = (startStr != null && startStr.length() >= 10)
+                                    ? LocalDate.parse(startStr.substring(0, 10))
+                                    : getDefaultPeriodStartDate();
+                            LocalDate end = (endStr != null && endStr.length() >= 10)
+                                    ? LocalDate.parse(endStr.substring(0, 10))
+                                    : start.plusWeeks(18);
+                            return new AcademicPeriodInfo(id, code, name, true, start, end);
+                        }
+                    }
+                    if (!array.isEmpty()) {
+                        JsonNode last = array.get(array.size() - 1);
+                        String id = last.path("id").asText();
+                        String code = last.path("code").asText();
+                        String name = last.path("name").asText();
+                        String startStr = last.path("startDate").asText();
+                        LocalDate start = (startStr != null && startStr.length() >= 10)
+                                ? LocalDate.parse(startStr.substring(0, 10))
+                                : getDefaultPeriodStartDate();
+                        LocalDate end = (last.path("endDate").asText() != null && last.path("endDate").asText().length() >= 10)
+                                ? LocalDate.parse(last.path("endDate").asText().substring(0, 10))
+                                : start.plusWeeks(18);
+                        return new AcademicPeriodInfo(id, code, name, false, start, end);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[UtpPortalGatewayAdapter] No se pudo resolver periodo académico activo desde /academicperiods: {}", e.getMessage());
+        }
+        return new AcademicPeriodInfo(getDefaultPeriodId(), "2026-2", getDefaultPeriodName(), true, getDefaultPeriodStartDate(), getDefaultPeriodStartDate().plusWeeks(18));
+    }
+
     /**
      * Namespace UUID v5 de la plataforma UTP+Class, usado para derivar el {@code paoUserId}.
      */
@@ -141,460 +205,53 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
     private String paoUuidNamespace;
 
     /**
-     * Carga el mapeo userId(PAO) por código de alumno desde la propiedad
-     * {@code utp.pao-user-map} o la variable de entorno {@code UTP_PAO_USER_MAP},
-     * con formato {@code <codigoAlumno>=<paoUserId>,<otroCodigo>=<otroPaoUserId>}.
-     *
-     * <p><b>Imprescindible:</b> el portal UTP+ Class (PAO) exige la cabecera
-     * {@code user-id} con el identificador PAO del alumno, que <b>no viaja en el JWT</b>
-     * de Keycloak (solo el {@code sub} de la cuenta SSO). Sin esta correspondencia, los
-     * endpoints PAO de sílabo y calendario responden HTTP 403 y el alumno recibe un
-     * sílabo vacío / cero actividades.</p>
-     *
-     * <p>Motivo de externalizarlo: no versionar información personal de estudiantes
-     * dentro del código fuente, sin perder funcionalidad.</p>
+     * Configura el namespace UUIDv5 de la derivación (Checkpoint §19). No hay mapas,
+     * sondas ni caché en disco: la identidad se recalcula en 0 ms por petición.
      */
     @PostConstruct
     public void loadPaoUserOverrides() {
-        // El namespace de derivacion puede venir de la configuracion de Spring.
         String envNamespace = System.getenv("UTP_PAO_UUID_NAMESPACE");
         if ((envNamespace == null || envNamespace.isBlank())
                 && paoUuidNamespace != null && !paoUuidNamespace.isBlank()) {
             System.setProperty("utp.pao-uuid-namespace", paoUuidNamespace.trim());
         }
-
-        String raw = (paoUserMapProperty != null && !paoUserMapProperty.isBlank())
-                ? paoUserMapProperty
-                : System.getenv("UTP_PAO_USER_MAP");
-
-        if (raw == null || raw.isBlank()) {
-            log.warn("[UtpPortalGatewayAdapter] Sin correspondencia PAO configurada "
-                    + "(utp.pao-user-map / UTP_PAO_USER_MAP). Se intentara el auto-descubrimiento "
-                    + "del paoUserId por alumno; si no es derivable, los endpoints PAO de silabo y "
-                    + "calendario responderan 403 y el alumno recibira una degradacion elegante.");
-            loadPaoUserCacheFromDisk();
-            return;
-        }
-
-        for (String entry : raw.split(",")) {
-            String[] kv = entry.split("=", 2);
-            if (kv.length != 2) {
-                continue;
-            }
-            String code = kv[0].trim().toLowerCase();
-            String userId = kv[1].trim();
-            if (!code.isBlank() && !userId.isBlank()) {
-                studentPaoUserMap.put(code, userId);
-            }
-        }
-        loadPaoUserCacheFromDisk();
-        log.info("[UtpPortalGatewayAdapter] Correspondencias PAO cargadas desde configuracion externa: {}",
-                studentPaoUserMap.size());
-        // Se persisten en la cache local para que la resolucion sobreviva a reinicios
-        // y no haya que reconfigurar el mapeo en cada despliegue.
-        persistPaoUserCacheToDisk();
     }
 
     // ==================================================================
-    // RESOLUCION DINAMICA DEL paoUserId (aislada por codigo de alumno)
+    // IDENTIDAD DETERMINISTA (RFC 4122 UUIDv5) â€” SIN CACHÉS, SONDA NI DISCO
     // ==================================================================
 
     /**
-     * Candidatos a {@code paoUserId} presentes en las claims del token de sesion.
-     *
-     * <p>Si la plataforma UTP expone el identificador interno de PAO en el token
-     * (claim {@code paoUserId} / {@code userId} / {@code classUserId}), se resuelve
-     * <b>automaticamente</b> sin intervencion manual.</p>
+     * Resuelve el {@code paoUserId} del alumno mediante derivación matemática directa
+     * (Checkpoint §19): {@code uuidv5(namespace, UPPER(codigo) + "@UTP.EDU.PE")}.
+     * Cero latencia, cero llamadas de red y cero estado compartido entre alumnos.
      */
-    private List<String> extractPaoUserIdCandidatesFromToken(String token) {
-        List<String> candidates = new ArrayList<>();
+    String extractUserIdFromToken(String token) {
         if (token == null || !token.contains(".")) {
-            return candidates;
-        }
-        try {
-            String[] parts = token.split("\\.");
-            if (parts.length < 2) {
-                return candidates;
-            }
-            byte[] decoded = Base64.getUrlDecoder().decode(parts[1]);
-            JsonNode payload = objectMapper.readTree(decoded);
-            for (String claim : new String[]{"paoUserId", "pao_user_id", "classUserId", "class_id", "userId", "user_id"}) {
-                if (payload.hasNonNull(claim)) {
-                    String value = payload.path(claim).asText();
-                    if (value != null && !value.isBlank() && !candidates.contains(value.trim())) {
-                        candidates.add(value.trim());
-                    }
-                }
-            }
-        } catch (Exception ignored) {
-            // Token no decodificable: se continuara con el resto de vias.
-        }
-        return candidates;
-    }
-
-    /**
-     * Candidatos institucionales expuestos por el GraphQL del Portal UTP para el alumno
-     * autenticado ({@code student.profile.peopleCode} y {@code student.profile.studentCode}).
-     *
-     * <p>Se consultan con el token del propio alumno, por lo que no requieren ningun
-     * secreto adicional ni mapeo previo.</p>
-     */
-    private List<String> fetchPortalCandidateIds(String token) {
-        List<String> candidates = new ArrayList<>();
-        if (token == null || token.isBlank()) {
-            return candidates;
-        }
-        String studentCode = extractStudentCodeFromToken(token);
-        if (studentCode.isBlank()) {
-            return candidates;
-        }
-        try {
-            String query = "{\"query\":\"{ student { profile { peopleCode studentCode } } }\"}";
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(getPortalEndpoint()))
-                    .timeout(Duration.ofSeconds(8))
-                    .header("accept", "application/json")
-                    .header("applicationid", "APP00002")
-                    .header("authorization", "Bearer " + token)
-                    .header("content-type", "application/json")
-                    .header("isreservation", "false")
-                    .header("user-id", studentCode)
-                    .header("user-role", "student")
-                    .POST(HttpRequest.BodyPublishers.ofString(query))
-                    .build();
-
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() == 200) {
-                JsonNode profile = objectMapper.readTree(response.body())
-                        .path("data").path("student").path("profile");
-                for (String field : new String[]{"peopleCode", "studentCode"}) {
-                    if (profile.hasNonNull(field)) {
-                        String value = profile.path(field).asText();
-                        if (value != null && !value.isBlank() && !candidates.contains(value.trim())) {
-                            candidates.add(value.trim());
-                        }
-                    }
-                }
-            }
-        } catch (Exception e) {
-            log.debug("[UtpPortalGatewayAdapter] No se pudieron obtener identificadores institucionales del Portal: {}", e.getMessage());
-        }
-        return candidates;
-    }
-
-    /**
-     * Comprueba si un identificador es un {@code paoUserId} valido para PAO.
-     *
-     * <p>Realiza una sonda HTTP minima y barata contra un endpoint PAO autenticado.
-     * Solo un {@code HTTP 200} acredita que la identidad corresponde al alumno.</p>
-     */
-    private boolean probePaoUserId(String candidate, String token) {
-        return probePaoUserIdStatus(candidate, token) == 200;
-    }
-
-    /**
-     * Sonda PAO que distingue entre "identidad rechazada" (403/401: el id es incorrecto)
-     * y "no concluyente" (error de red: no se puede decidir).
-     *
-     * @return codigo HTTP de la respuesta, o -1 si no hubo respuesta concluyente.
-     */
-    private int probePaoUserIdStatus(String candidate, String token) {
-        if (candidate == null || candidate.isBlank() || token == null || token.isBlank()) {
-            return -1;
-        }
-        try {
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(getPaoEndpoint("/communication/student/ad/banners")))
-                    .timeout(Duration.ofSeconds(8))
-                    .header("accept", "application/json")
-                    .header("authorization", "Bearer " + token)
-                    .header("user-id", candidate)
-                    .header("user-role", "STUDENT")
-                    .header("x-tenant-id", extractTenantIdFromToken(token))
-                    .GET()
-                    .build();
-
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            return response.statusCode();
-        } catch (Exception e) {
-            log.debug("[UtpPortalGatewayAdapter] Sonda PAO no concluyente para candidato: {}", e.getMessage());
-            return -1;
-        }
-    }
-
-    /**
-     * Auto-descubre el {@code paoUserId} de un alumno probando candidatos y validandolos
-     * contra el propio PAO.
-     *
-     * <p>El resultado válido se registra en el mapa aislado por codigo de alumno, de modo
-     * que el descubrimiento ocurre <b>una sola vez</b> por alumno y queda cacheado.</p>
-     *
-     * @return el {@code paoUserId} resuelto, o cadena vacia si no es derivable.
-     */
-    private String discoverPaoUserId(String studentCode, String token) {
-        if (studentCode == null || studentCode.isBlank()) {
             return "";
         }
-        String key = studentCode.toLowerCase();
-
-        // Evita repetir el descubrimiento (y sus sondas HTTP) dentro de la ventana de TTL.
-        Long lastAttempt = paoDiscoveryAttempts.get(key);
-        if (lastAttempt != null && (System.currentTimeMillis() - lastAttempt) < PAO_DISCOVERY_TTL_MILLIS) {
-            return "";
-        }
-        paoDiscoveryAttempts.put(key, System.currentTimeMillis());
-
-        List<String> candidates = new ArrayList<>();
-        candidates.addAll(extractPaoUserIdCandidatesFromToken(token));
-        candidates.addAll(fetchPortalCandidateIds(token));
-
-        for (String candidate : candidates) {
-            if (probePaoUserId(candidate, token)) {
-                registerPaoUserId(key, candidate);
-                log.info("[UtpPortalGatewayAdapter] paoUserId auto-descubierto para el alumno {} (candidato '{}' validado contra PAO)",
-                        key, candidate);
-                return candidate;
-            }
-            log.debug("[UtpPortalGatewayAdapter] Candidato '{}' no validado como paoUserId para {}", candidate, key);
-        }
-
-        log.debug("[UtpPortalGatewayAdapter] No fue posible auto-descubrir el paoUserId del alumno {} "
-                + "(candidatos evaluados: {})", key, candidates.size());
-        return "";
-    }
-
-    /**
-     * Registra el {@code paoUserId} de un alumno en el mapa aislado y lo persiste
-     * en la cache local (best effort).
-     */
-    /**
-     * Selecciona la derivacion valida para el alumno, saltando los identificadores que PAO
-     * ha rechazado previamente (auto-recuperacion ante un cambio de namespace en la plataforma).
-     */
-    private String selectValidDerivedId(String studentCode, String email) {
-        Set<String> invalidated = invalidatedPaoIds.get(studentCode == null ? "" : studentCode.toLowerCase());
-        for (String candidate : PaoUserIdDeriver.deriveCandidates(email)) {
-            if (invalidated == null || !invalidated.contains(candidate)) {
-                return candidate;
-            }
-        }
-        return "";
-    }
-
-    /**
-     * Marca como invalido un {@code paoUserId} que PAO ha rechazado, de modo que la
-     * siguiente peticion del alumno pruebe la siguiente variante derivada.
-     */
-    private void invalidatePaoUserId(String studentCode, String usedUserId) {
-        if (studentCode == null || studentCode.isBlank() || usedUserId == null || usedUserId.isBlank()) {
-            return;
-        }
-        String key = studentCode.toLowerCase();
-        invalidatedPaoIds.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet()).add(usedUserId);
-        studentPaoUserMap.remove(key);
-        log.warn("[UtpPortalGatewayAdapter] PAO rechazó el identificador {} del alumno {}. "
-                + "Se probará la siguiente variante derivada.", usedUserId, key);
-    }
-
-    /**
-     * Registra un {@code paoUserId} derivado en el mapa de valores derivados (solo memoria).
-     *
-     * <p>Los valores derivados <b>no se persisten</b>: son deterministas y se recalculan
-     * en cada arranque, de modo que nunca pueden quedar obsoletos ni contaminar la cache
-     * persistente con valores de prueba.</p>
-     */
-    private void registerPaoUserId(String studentCode, String paoUserId) {
-        if (studentCode == null || studentCode.isBlank() || paoUserId == null || paoUserId.isBlank()) {
-            return;
-        }
-        String key = studentCode.toLowerCase();
-        if (paoUserId.equals(derivedPaoUserMap.get(key))) {
-            return;
-        }
-        derivedPaoUserMap.put(key, paoUserId);
-    }
-
-    /**
-     * Auto-registro por observacion: si una llamada a PAO resulto exitosa con un
-     * {@code user-id} concreto, ese identificador es el {@code paoUserId} real del alumno
-     * y queda cacheado para el. Cierra el ciclo y hace que la resolucion sea
-     * autosuficiente a partir de la primera interaccion válida.
-     */
-    private void rememberResolvedPaoUserId(String token, String usedUserId) {
-        if (token == null || token.isBlank() || usedUserId == null || usedUserId.isBlank()) {
-            return;
-        }
-        String studentCode = extractStudentCodeFromToken(token);
-        if (studentCode.isBlank()) {
-            return;
-        }
-        String key = studentCode.toLowerCase();
-        String known = studentPaoUserMap.get(key);
-        if (!usedUserId.equals(known)) {
-            registerPaoUserId(key, usedUserId);
-            log.info("[UtpPortalGatewayAdapter] paoUserId registrado automaticamente para el alumno {} "
-                    + "tras una llamada PAO exitosa", key);
-        }
-    }
-
-    // ==================================================================
-    // Cache local persistente del mapeo studentCode -> paoUserId
-    // ==================================================================
-
-    /**
-     * Ruta del fichero de cache. Se prioriza la variable de entorno para poder
-     * apuntar a un volumen persistente en PaaS.
-     */
-    private String paoUserCachePath() {
-        String configured = System.getenv("UTP_PAO_USER_CACHE_FILE");
-        if (configured != null && !configured.isBlank()) {
-            return configured;
-        }
-        return java.nio.file.Paths.get(System.getProperty("user.dir", "."), ".pao-user-map.cache.json").toString();
-    }
-
-    @SuppressWarnings("unchecked")
-    private void loadPaoUserCacheFromDisk() {
-        try {
-            java.nio.file.Path path = java.nio.file.Paths.get(paoUserCachePath());
-            if (!java.nio.file.Files.exists(path)) {
-                return;
-            }
-            Map<String, String> cached = objectMapper.readValue(java.nio.file.Files.readString(path), Map.class);
-            int loaded = 0;
-            for (Map.Entry<String, String> entry : cached.entrySet()) {
-                if (entry.getKey() != null && entry.getValue() != null
-                        && !entry.getKey().isBlank() && !entry.getValue().isBlank()) {
-                    // Solo se restaura la configuracion explicita del operador.
-                    studentPaoUserMap.putIfAbsent(entry.getKey().toLowerCase(), entry.getValue());
-                    loaded++;
-                }
-            }
-            if (loaded > 0) {
-                log.info("[UtpPortalGatewayAdapter] {} correspondencias PAO restauradas desde la cache local", loaded);
-            }
-        } catch (Exception e) {
-            log.debug("[UtpPortalGatewayAdapter] No se pudo leer la cache local de paoUserId: {}", e.getMessage());
-        }
-    }
-
-    private synchronized void persistPaoUserCacheToDisk() {
-        // Solo se persiste la configuracion EXPLICITA del operador: los valores derivados
-        // son deterministas y no deben sobrevivar a un reinicio (ni contaminar la cache).
-        if (studentPaoUserMap.isEmpty()) {
-            return;
-        }
-        try {
-            java.nio.file.Path path = java.nio.file.Paths.get(paoUserCachePath());
-            objectMapper.writerWithDefaultPrettyPrinter().writeValue(path.toFile(), studentPaoUserMap);
-            log.debug("[UtpPortalGatewayAdapter] Cache local de paoUserId actualizada ({} entradas)", studentPaoUserMap.size());
-        } catch (Exception e) {
-            log.debug("[UtpPortalGatewayAdapter] No se pudo persistir la cache local de paoUserId: {}", e.getMessage());
-        }
-    }
-
-    public static class ClassroomLocation {
-        public final String aula;
-        public final String pabellon;
-        public final String campus;
-
-        public ClassroomLocation(String aula, String pabellon, String campus) {
-            this.aula = aula;
-            this.pabellon = pabellon;
-            this.campus = campus;
-        }
-    }
-
-    public static ClassroomLocation getClassroomLocation(String courseName, String sectionCode) {
-        boolean isLab = courseName.toUpperCase().contains("WEB") ||
-                courseName.toUpperCase().contains("CLOUD") ||
-                courseName.toUpperCase().contains("PROGRAMACI") ||
-                courseName.toUpperCase().contains("SISTEMAS") ||
-                courseName.toUpperCase().contains("LAB");
-        return new ClassroomLocation(isLab ? "Laboratorio" : "Aula", "", "");
-    }
-
-    /**
-     * Resuelve el {@code paoUserId} (identidad interna de PAO) del alumno, en cascada:
-     *
-     * <ol>
-     *   <li><b>Claim del token</b> ({@code paoUserId}/{@code userId}/{@code classUserId}): si la
-     *       plataforma lo expone, se resuelve sin ninguna intervencion manual.</li>
-     *   <li><b>Registro en cache</b> del alumno (auto-descubrimiento previo o correspondencia
-     *       externa): indexado por codigo de alumno, nunca compartido.</li>
-     *   <li><b>Auto-descubrimiento validado</b>: se extraen los identificadores institucionales
-     *       del Portal UTP (peopleCode/studentCode) y se validan contra PAO; el que responde
-     *       HTTP 200 es el {@code paoUserId} real y queda cacheado para el alumno.</li>
-     *   <li><b>Fallback</b> al claim {@code sub} de Keycloak.</li>
-     * </ol>
-     *
-     * <p>El aislamiento es estricto: cada alumno resuelve y cachea su propia identidad y
-     * jamás se presta la de otro.</p>
-     */
-    private String extractUserIdFromToken(String token) {
-        if (token == null || !token.contains(".")) return "";
         try {
             String[] parts = token.split("\\.");
             if (parts.length >= 2) {
                 byte[] decoded = Base64.getUrlDecoder().decode(parts[1]);
                 JsonNode payload = objectMapper.readTree(decoded);
 
-                String studentCode = payload.hasNonNull("preferred_username")
-                        ? payload.path("preferred_username").asText().toLowerCase()
-                        : (payload.hasNonNull("username") ? payload.path("username").asText().toLowerCase() : "");
-
-                // 1) Configuracion explicita del operador (utp.pao-user-map / UTP_PAO_USER_MAP).
-                if (!studentCode.isBlank() && studentPaoUserMap.containsKey(studentCode)) {
-                    String known = studentPaoUserMap.get(studentCode);
-                    if (known != null && !known.isBlank()) {
-                        return known;
-                    }
-                }
-                // 2) Derivacion determinista (uuidv5 sobre el correo institucional).
-                //    Es la misma regla que aplica el portal oficial UTP+Class: no requiere
-                //    configuracion, no hace llamadas de red y funciona para cualquier alumno.
-                //    Se usa directamente (fail-open) para no degradar a un identificador
-                //    invalido por un fallo transitorio de red.
-                if (!studentCode.isBlank() && derivedPaoUserMap.containsKey(studentCode)) {
-                    String known = derivedPaoUserMap.get(studentCode);
-                    if (known != null && !known.isBlank()) {
-                        return known;
-                    }
-                }
-                String email = payload.hasNonNull("email") ? payload.path("email").asText() : null;
-                String derived = selectValidDerivedId(studentCode, email);
+                // Checkpoint §19: la semilla es SIEMPRE el codigo de alumno del claim,
+                // no el claim email (que podria ser un alias distinto al oficial).
+                String code = payload.hasNonNull("preferred_username")
+                        ? payload.path("preferred_username").asText()
+                        : (payload.hasNonNull("username") ? payload.path("username").asText() : "");
+                String seed = !code.isBlank()
+                        ? code.trim() + "@UTP.EDU.PE"
+                        : (payload.hasNonNull("email") ? payload.path("email").asText() : null);
+                String derived = PaoUserIdDeriver.derive(seed);
                 if (!derived.isBlank()) {
-                    derivedPaoUserMap.put(studentCode.toLowerCase(), derived);
                     return derived;
                 }
-
-                // 3) Claim directo del token: solo se acepta si PAO lo valida, para no
-                //    usar identificadores de ejemplo o obsoletos.
-                List<String> claimCandidates = extractPaoUserIdCandidatesFromToken(token);
-                for (String claimCandidate : claimCandidates) {
-                    int status = probePaoUserIdStatus(claimCandidate, token);
-                    if (status == 200) {
-                        derivedPaoUserMap.put(studentCode.toLowerCase(), claimCandidate);
-                        log.info("[UtpPortalGatewayAdapter] paoUserId validado desde el claim del token para el alumno {}",
-                                studentCode);
-                        return claimCandidate;
-                    }
-                    log.warn("[UtpPortalGatewayAdapter] El claim de paoUserId del alumno {} no es aceptado por PAO (HTTP {}). "
-                            + "Se continua con la derivacion determinista.", studentCode, status);
-                }
-
-                // 4) Auto-descubrimiento validado contra PAO.
-                if (!studentCode.isBlank()) {
-                    String discovered = discoverPaoUserId(studentCode, token);
-                    if (!discovered.isBlank()) {
-                        return discovered;
-                    }
-                }
-
-                // 5) Fallback al 'sub' de Keycloak (puede ser rechazado por PAO con 403).
-                if (payload.hasNonNull("sub")) return payload.path("sub").asText();
             }
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            log.warn("[UtpPortalGatewayAdapter] No fue posible derivar el paoUserId del token: {}", e.getMessage());
+        }
         return "";
     }
 
@@ -605,29 +262,42 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
             if (parts.length >= 2) {
                 byte[] decoded = Base64.getUrlDecoder().decode(parts[1]);
                 JsonNode payload = objectMapper.readTree(decoded);
-                if (payload.hasNonNull("preferred_username")) return payload.path("preferred_username").asText().toLowerCase();
-                if (payload.hasNonNull("username")) return payload.path("username").asText().toLowerCase();
-                if (payload.hasNonNull("sub")) return payload.path("sub").asText().toLowerCase();
+                if (payload.hasNonNull("preferred_username")) return payload.path("preferred_username").asText().trim().toUpperCase();
+                if (payload.hasNonNull("username")) return payload.path("username").asText().trim().toUpperCase();
+                if (payload.hasNonNull("sub")) return payload.path("sub").asText().trim().toUpperCase();
             }
         } catch (Exception ignored) {}
         return "";
     }
 
-    private String extractTenantIdFromToken(String token) {
-        if (token != null && token.contains(".")) {
-            try {
-                String[] parts = token.split("\\.");
-                if (parts.length >= 2) {
-                    byte[] decoded = Base64.getUrlDecoder().decode(parts[1]);
-                    JsonNode payload = objectMapper.readTree(decoded);
-                    if (payload.hasNonNull("tenantId")) return payload.path("tenantId").asText();
-                    if (payload.hasNonNull("tenant_id")) return payload.path("tenant_id").asText();
-                    if (payload.hasNonNull("tenant")) return payload.path("tenant").asText();
-                    if (payload.hasNonNull("x-tenant-id")) return payload.path("x-tenant-id").asText();
-                }
-            } catch (Exception ignored) {}
+    /**
+     * Resuelve el tenant del token de sesión UTP. <b>Fail-fast:</b> si el JWT no declara
+     * ninguno de los claims reconocidos, se lanza {@link AuthenticationException} en vez de
+     * inyectar un UUID fijo (que suplantaría la identidad del tenant ante PAO).
+     */
+    String extractTenantIdFromToken(String token) {
+        if (token == null || token.isBlank() || !token.contains(".")) {
+            throw new AuthenticationException("El token de sesión UTP no contiene un tenant válido.");
         }
-        return "a5f469d2-3c0e-5c68-8d32-5265923a8e40";
+        try {
+            String[] parts = token.split("\\.");
+            if (parts.length >= 2) {
+                byte[] decoded = Base64.getUrlDecoder().decode(parts[1]);
+                JsonNode payload = objectMapper.readTree(decoded);
+                for (String claim : new String[]{"tenantId", "tenant_id", "tenant", "x-tenant-id"}) {
+                    JsonNode value = payload.get(claim);
+                    if (value != null && value.isValueNode() && !value.asText().isBlank()) {
+                        return value.asText();
+                    }
+                }
+            }
+        } catch (AuthenticationException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new AuthenticationException("No fue posible leer el tenant del token de sesión UTP.", e);
+        }
+        throw new AuthenticationException(
+                "El token de sesión UTP no declara tenant (se requiere tenantId, tenant_id, tenant o x-tenant-id).");
     }
 
     @Override
@@ -668,7 +338,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                     int expiresIn = root.hasNonNull("expires_in") ? root.path("expires_in").asInt(1800) : 1800;
 
                     StudentProfile base = parseProfileFromTokens(accessToken, refreshToken, expiresIn, cleanUsername);
-                    // El JWT pao-web NO incluye career/campus/cycle — enriquecer desde Portal GraphQL
+                    // El JWT pao-web NO incluye career/campus/cycle â€” enriquecer desde Portal GraphQL
                     StudentProfile profile = enrichProfileFromPortal(base, accessToken);
                     log.info("[UTP SSO Auth] Autenticación exitosa en {}: {} | campus='{}' | carrera='{}' | ciclo={}",
                             endpoint, profile.getStudentCode(), profile.getCampus(), profile.getCareer(), profile.getCurrentCycle());
@@ -826,7 +496,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         String career = base.getCareer();
         String campus = base.getCampus();
         int cycle = base.getCurrentCycle() != null ? base.getCurrentCycle() : 1;
-        String studentCode = base.getStudentCode() != null ? base.getStudentCode().toLowerCase() : "";
+        String studentCode = base.getStudentCode() != null ? base.getStudentCode().trim().toUpperCase() : "";
 
         String portalEndpoint = getPortalEndpoint();
         Map<String, String> commonHeaders = Map.of(
@@ -838,7 +508,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 "user-role", "student"
         );
 
-        // 1. getProfile → academic.progDesc (carrera legible) + campusDesc
+        // 1. getProfile â†’ academic.progDesc (carrera legible) + campusDesc
         try {
             String profileQuery = "{\"operationName\":\"getProfile\",\"variables\":{}," +
                     "\"query\":\"query getProfile { student { academic { campusDesc progDesc } } }\"}";
@@ -866,7 +536,8 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
 
         // 2. GetCourseSummary → summary.relativeCycle (ciclo real) + summary.campus (fallback)
         try {
-            String summaryQuery = "{\"operationName\":\"GetCourseSummary\",\"variables\":{\"periodId\":\"2263\"}," +
+            String enrichPeriod = resolveCurrentAcademicPeriod(accessToken).id();
+            String summaryQuery = "{\"operationName\":\"GetCourseSummary\",\"variables\":{\"periodId\":\"" + enrichPeriod + "\"}," +
                     "\"query\":\"query GetCourseSummary($periodId: String!) { getCourseSummary(periodId: $periodId) { summary { campus relativeCycle } } }\"}";
 
             HttpRequest.Builder summaryReqBuilder = HttpRequest.newBuilder()
@@ -917,178 +588,133 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         if (!token.contains(".")) {
             throw new AuthenticationException("El token de sesión UTP no tiene formato JWT.");
         }
-
-        // 1. Intentar extracción 100% real de aulas, pabellones y docentes via Portal GraphQL
-        RuntimeException graphqlFailure = null;
-        try {
-            ScheduleInterval graphqlInterval = fetchScheduleFromPortalGraphQL(token, period);
-            if (graphqlInterval != null && !graphqlInterval.getClasses().isEmpty()) {
-                log.info("[UTP Portal GraphQL] Horario extraído exitosamente con {} clases reales", graphqlInterval.getClasses().size());
-                return graphqlInterval;
-            }
-        } catch (AuthenticationException e) {
-            throw e;
-        } catch (RuntimeException e) {
-            if (isDashboardFailure(e)) {
-                // Un fallo del catálogo institucional NUNCA se degrada a horario vacío.
-                throw e;
-            }
-            graphqlFailure = e;
-            log.warn("[UTP Portal GraphQL] Error consultando GraphQL portal: {}. Intentando fallback PAO...", e.getMessage());
-        }
-
-        // 2. Fallback a PAO Calendar si GraphQL falla o no aporta clases
-        String userId = extractUserIdFromToken(token);
-        if (userId == null || userId.isBlank()) {
-            throw new AuthenticationException("El token de sesión UTP no contiene un identificador de usuario (sub).");
-        }
-
-        try {
-            String tenantId = extractTenantIdFromToken(token);
-            String dateToQuery = LocalDate.now().toString() + " 00:00:00";
-            String url = getPaoEndpoint("/course/student/calendar?userId=")
-                    + URLEncoder.encode(userId, StandardCharsets.UTF_8)
-                    + "&dateToQuery=" + URLEncoder.encode(dateToQuery, StandardCharsets.UTF_8)
-                    + "&intervalMode=period";
-
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(url))
-                    .timeout(Duration.ofSeconds(15))
-                    .header("Authorization", "Bearer " + token)
-                    .header("x-tenant-id", tenantId)
-                    .header("user-id", userId)
-                    .header("user-role", "STUDENT")
-                    .header("origin", "https://class.utp.edu.pe")
-                    .header("referer", "https://class.utp.edu.pe/")
-                    .header("Accept", "application/json, text/plain, */*")
-                    .GET()
-                    .build();
-
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
-            if (response.statusCode() == 200) {
-                JsonNode root = objectMapper.readTree(response.body());
-                if (root.has("errors")) {
-                    throw new UpstreamServiceException("UTP PAO devolvió errores al consultar el horario.");
-                }
-                JsonNode intervalNode = root.path("data").path("current_interval");
-                if (intervalNode != null && intervalNode.hasNonNull("events")) {
-                    return parsePaoCalendarResponse(intervalNode, extractStudentCodeFromToken(token), token);
-                }
-                // 200 sin eventos: el periodo no tiene clases programadas; es un vacío legítimo.
-                return emptyScheduleInterval(period);
-            } else if (response.statusCode() == 401 || response.statusCode() == 403) {
-                log.warn("[UTP PAO Calendar] Sesión rechazada por PAO gateway (HTTP {})", response.statusCode());
-                throw new AuthenticationException("Sesión institucional UTP expirada o no autorizada en PAO (HTTP " + response.statusCode() + ").");
-            } else if (response.statusCode() == 404) {
-                throw new ResourceNotFoundException("El portal UTP no encontró el calendario del estudiante para el periodo solicitado.");
-            } else if (response.statusCode() >= 500) {
-                log.error("[UTP PAO Calendar] Error interno de PAO gateway (HTTP {})", response.statusCode());
-                throw new UpstreamServiceException("El portal institucional UTP (PAO) no está disponible (HTTP " + response.statusCode() + ").");
-            } else {
-                log.warn("[UTP PAO Calendar] Status no exitoso ({}) desde PAO gateway", response.statusCode());
-                throw new UpstreamServiceException("Respuesta inesperada de UTP PAO (HTTP " + response.statusCode() + ").");
-            }
-        } catch (AuthenticationException | ResourceNotFoundException | UpstreamServiceException e) {
-            throw e;
-        } catch (Exception e) {
-            String graphqlDetail = graphqlFailure != null ? " (GraphQL: " + graphqlFailure.getMessage() + ")" : "";
-            log.warn("[UTP PAO Calendar] Excepción al consultar horario en vivo UTP: {}", e.getMessage());
-            throw new UpstreamServiceException("Error de conexión al consultar horario en UTP" + graphqlDetail + ": " + e.getMessage(), e);
-        }
+        // Directiva Checkpoint §18.3: scheduleByDate es la ÚNICA fuente del horario.
+        // No existe caída a /course/student/calendar: entregar deadlines como clases
+        // sería un fallback engañoso (sin aula, edificio, docente ni franja horaria).
+        return fetchScheduleFromPortalGraphQL(token, period);
     }
 
     private ScheduleInterval emptyScheduleInterval(String period) {
+        LocalDate startDate = getDefaultPeriodStartDate();
         return ScheduleInterval.builder()
                 .id("interval-empty")
-                .periodName(period != null ? period : "2026 - Ciclo 2 Agosto")
+                .periodName(period != null && !period.isBlank() ? period : getDefaultPeriodName())
                 .weekNumber(1)
                 .totalWeeks(18)
-                .startDate(LocalDate.now())
-                .endDate(LocalDate.now().plusWeeks(18))
+                .startDate(startDate)
+                .endDate(startDate.plusWeeks(18))
                 .courses(List.of())
                 .classes(List.of())
                 .enrichmentStatus("COMPLETE")
                 .build();
     }
 
+    /** Proyección verificada de scheduleByDate (Checkpoint §8.8 + Ruptura 2). */
+    private static final String SCHEDULE_GRAPHQL_QUERY = """
+            query getSchedules($date: Float!, $periods: [String!]) {
+              scheduleByDate(filters: {date: $date, classTypes: [1, 2, 3, 4, 5, 6], periods: $periods}) {
+                dates {
+                  date
+                  items {
+                    name
+                    period
+                    modality { id }
+                    startTime
+                    endTime
+                    class {
+                      id
+                      start
+                      end
+                      descAmb
+                      classType
+                      instructionMode
+                      linkZoom
+                      linkCourseClass
+                      location {
+                        classRoom { id desc floor }
+                        building { id desc address }
+                      }
+                      professors { firstName lastName }
+                    }
+                  }
+                }
+              }
+            }
+            """;
+
     private ScheduleInterval fetchScheduleFromPortalGraphQL(String token, String period) {
         String studentCode = extractStudentCodeFromToken(token);
+        if (studentCode.isBlank()) {
+            throw new AuthenticationException("El token de sesión UTP no contiene código de estudiante válido.");
+        }
 
-        // Sincronizar catálogo de pabellones/edificios si no existe en memoria
         ensureBuildingsLoaded(token, studentCode);
 
-        // Identificar período de consulta (ej. "2263")
-        String periodCode = (period != null && period.matches("^\\d{4}$")) ? period : "2263";
+        AcademicPeriodInfo periodInfo = resolveCurrentAcademicPeriod(token);
+        String currentPeriod = (period != null && period.matches("^\\d{4}$")) ? period : periodInfo.id();
+        // Ruptura 5 (Checkpoint §13): conjunto compuesto de periodos, sin filtrar por
+        // flag `active` (siempre true en Canvas) y preservando talleres 9999.
+        Set<String> targetPeriods = new LinkedHashSet<>();
+        targetPeriods.add(currentPeriod);
+        targetPeriods.add("9999");
 
-        // Consultar semanas del ciclo (Semana 1 = 10 de Agosto 2026)
-        long semesterStartMillis = 1786338000000L; // 2026-08-10 00:00:00 UTC (inicio oficial de periodo)
-        long nowMillis = System.currentTimeMillis();
-        long diffMillis = nowMillis - semesterStartMillis;
-        int currentWeekCalc = (int) Math.max(1, Math.min(18, (diffMillis / (7L * 24 * 60 * 60 * 1000L)) + 1));
-
-        // Catálogo institucional (aislamiento resiliente): fuente de courseCode, classNumber y modalidad real.
-        List<DashboardCourseRef> dashboard;
+        // Checkpoint 5: un fallo del catalogo institucional (401/403/404/5xx/red) se
+        // propaga como excepcion tipada; NUNCA se degrada a un horario sin courseCode.
+        List<DashboardCourseRef> dashboard = loadDashboardCourses(token, targetPeriods);
         boolean dashboardUpstreamFailed = false;
-        try {
-            dashboard = loadDashboardCourses(token, periodCode);
-        } catch (DashboardAuthException e) {
-            throw e;
-        } catch (RuntimeException e) {
-            dashboardUpstreamFailed = true;
-            log.warn("[UtpPortalGatewayAdapter] No se pudo enriquecer catálogo desde dashboard-courses ({}). Continuando con enriquecimiento parcial para horario GraphQL.", e.toString());
-            dashboard = Collections.emptyList();
-        }
+
         Map<String, DashboardCourseRef> dashboardBySectionId = dashboard.stream()
                 .filter(r -> r.sectionId() != null && !r.sectionId().isBlank())
                 .collect(Collectors.toMap(DashboardCourseRef::sectionId, r -> r, (a, b) -> a, LinkedHashMap::new));
-        Map<String, DashboardCourseRef> dashboardByName = dashboard.stream()
-                .filter(r -> r.name() != null && !r.name().isBlank())
-                .collect(Collectors.toMap(r -> normalizeCourseName(r.name()), r -> r, (a, b) -> a, LinkedHashMap::new));
+        Map<String, Course> sectionCatalog = dashboardBySectionId.values().stream()
+                .map(ref -> Course.builder()
+                        .id("c-" + (ref.sectionId() == null ? "" : ref.sectionId()))
+                        .code(ref.courseCode())
+                        .name(ref.name())
+                        .section(ref.classNumber())
+                        .sectionId(ref.sectionId())
+                        .modalityType(ref.modality())
+                        .build())
+                .filter(c -> c.getSectionId() != null)
+                .collect(Collectors.toMap(Course::getSectionId, c -> c, (a, b) -> a, LinkedHashMap::new));
 
+        Map<String, Course> nameCatalog = dashboard.stream()
+                .filter(r -> r.name() != null && !r.name().isBlank())
+                .map(r -> Course.builder()
+                        .code(r.courseCode())
+                        .name(r.name())
+                        .section(r.classNumber())
+                        .sectionId(r.sectionId())
+                        .modalityType(r.modality())
+                        .build())
+                .collect(Collectors.toMap(
+                        c -> CourseNameNormalizer.normalize(c.getName()),
+                        c -> c, (a, b) -> a, LinkedHashMap::new));
+
+        ScheduleItemParser parser = new ScheduleItemParser(sectionCatalog, nameCatalog, buildingCache);
         List<ClassSession> allClasses = new ArrayList<>();
-        Map<String, Course> coursesMap = new HashMap<>();
+        Map<String, Course> coursesMap = new LinkedHashMap<>();
+        java.util.concurrent.atomic.AtomicInteger rejectedCountRef = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger unresolvedBuildingRef = new java.util.concurrent.atomic.AtomicInteger();
         RuntimeException lastFailure = null;
 
-        String scheduleGraphqlQuery = "query getSchedules($date: Float!, $periods: [String!]) {\n" +
-                "  scheduleByDate(filters: {date: $date, classTypes: [1, 2, 3, 4, 5, 6], periods: $periods}) {\n" +
-                "    dates {\n" +
-                "      date\n" +
-                "      items {\n" +
-                "        name\n" +
-                "        period\n" +
-                "        class {\n" +
-                "          id\n" +
-                "          start\n" +
-                "          end\n" +
-                "          descAmb\n" +
-                "          professors { firstName lastName }\n" +
-                "          location {\n" +
-                "            classRoom { desc id floor }\n" +
-                "            building { id desc address }\n" +
-                "          }\n" +
-                "          instructionMode\n" +
-                "          linkZoom\n" +
-                "          linkCourseClass\n" +
-                "        }\n" +
-                "      }\n" +
-                "    }\n" +
-                "  }\n" +
-                "}\n";
+        LocalDate periodStartDate = (period != null && period.matches("^\\d{4}$")) ? getDefaultPeriodStartDate() : periodInfo.startDate();
+        long semesterStartMillis = periodStartDate.atStartOfDay(java.time.ZoneOffset.UTC).toInstant().toEpochMilli();
+        long nowMillis = System.currentTimeMillis();
+        int currentWeekCalc = (int) Math.max(1, Math.min(18,
+                ((nowMillis - semesterStartMillis) / (7L * 24 * 60 * 60 * 1000L)) + 1));
 
         for (int w = 0; w < 18; w++) {
             long weekTimestamp = semesterStartMillis + (w * 7L * 24 * 60 * 60 * 1000L);
-            try {
-                Map<String, Object> vars = Map.of(
-                        "date", weekTimestamp,
-                        "periods", List.of(periodCode)
-                );
-                Map<String, Object> bodyObj = Map.of(
-                        "operationName", "getSchedules",
-                        "variables", vars,
-                        "query", scheduleGraphqlQuery
-                );
+            Map<String, Object> vars = new LinkedHashMap<>();
+            vars.put("date", weekTimestamp);
+            vars.put("periods", List.of(currentPeriod));
+            Map<String, Object> bodyObj = new LinkedHashMap<>();
+            bodyObj.put("operationName", "getSchedules");
+            bodyObj.put("variables", vars);
+            bodyObj.put("query", SCHEDULE_GRAPHQL_QUERY);
 
+            try {
                 HttpRequest req = HttpRequest.newBuilder()
                         .uri(URI.create(getPortalEndpoint()))
                         .timeout(Duration.ofSeconds(10))
@@ -1104,228 +730,131 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                         .build();
 
                 HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
-                if (resp.statusCode() == 200) {
-                    JsonNode root = objectMapper.readTree(resp.body());
-                    JsonNode datesNode = root.path("data").path("scheduleByDate").path("dates");
-                    if (root.has("errors") && (!datesNode.isArray() || datesNode.isEmpty())) {
-                        lastFailure = new UpstreamServiceException(
-                                "UTP Portal GraphQL devolvió errores al consultar la semana " + (w + 1) + ".");
+                if (resp.statusCode() == 401 || resp.statusCode() == 403) {
+                    throw new AuthenticationException(
+                            "Sesión institucional UTP expirada o no autorizada en Portal GraphQL (HTTP "
+                                    + resp.statusCode() + ").");
+                }
+                if (resp.statusCode() != 200) {
+                    lastFailure = new UpstreamServiceException(
+                            "El Portal UTP no está disponible (HTTP " + resp.statusCode()
+                                    + ") al consultar la semana " + (w + 1) + ".");
+                    continue;
+                }
+
+                JsonNode root = objectMapper.readTree(resp.body());
+                JsonNode dates = root.path("data").path("scheduleByDate").path("dates");
+                if (root.has("errors") && (dates.isMissingNode() || dates.isEmpty())) {
+                    lastFailure = new UpstreamServiceException(
+                            "El Portal UTP devolvió errores al consultar la semana " + (w + 1) + ".");
+                    continue;
+                }
+                if (!dates.isArray()) {
+                    continue;
+                }
+                for (JsonNode dateNode : dates) {
+                    JsonNode items = dateNode.path("items");
+                    if (!items.isArray()) {
                         continue;
                     }
-                    if (datesNode.isArray()) {
-                        for (JsonNode dNode : datesNode) {
-                            JsonNode itemsNode = dNode.path("items");
-                            if (itemsNode.isArray()) {
-                                for (JsonNode it : itemsNode) {
-                                    JsonNode cls = it.path("class");
-                                    if (cls.isMissingNode() || cls.isNull()) continue;
-
-                                    String courseNameRaw = it.path("name").asText();
-                                    ParsedTitle pt = parseTitle(courseNameRaw);
-                                    String cleanCourseName = pt.cleanTitle;
-
-                                    String classId = cls.path("id").asText();
-                                    String linkCourseClass = cls.hasNonNull("linkCourseClass") ? cls.path("linkCourseClass").asText() : null;
-
-                                    String sectionCode = !pt.sectionCode.isBlank() ? pt.sectionCode : (it.hasNonNull("section") ? it.path("section").asText() : "");
-                                    if (sectionCode.isBlank() && classId.matches("^\\d+$")) {
-                                        sectionCode = classId;
-                                    }
-
-                                    String courseUuid = "";
-                                    String sectionUuid = "";
-                                    if (linkCourseClass != null) {
-                                        Matcher mUuids = Pattern.compile("courses?/([0-9a-fA-F-]+)/sections?/([0-9a-fA-F-]+)").matcher(linkCourseClass);
-                                        if (mUuids.find()) {
-                                            courseUuid = mUuids.group(1);
-                                            sectionUuid = mUuids.group(2);
-                                        } else {
-                                            Matcher mLink = Pattern.compile("courses?/(\\d+)").matcher(linkCourseClass);
-                                            if (mLink.find() && sectionCode.isBlank()) {
-                                                sectionCode = mLink.group(1);
-                                            }
-                                        }
-                                    }
-
-                                    // JOIN determinista: UUID de Canvas del aula -> catálogo institucional.
-                                    DashboardCourseRef officialRef = dashboardBySectionId.get(sectionUuid);
-                                    if (officialRef == null) {
-                                        officialRef = dashboardByName.get(normalizeCourseName(cleanCourseName));
-                                    }
-                                    String officialCode = officialRef != null ? officialRef.courseCode() : null;
-                                    String officialSection = officialRef != null && officialRef.classNumber() != null
-                                            && !officialRef.classNumber().isBlank()
-                                            ? officialRef.classNumber() : sectionCode;
-                                    if (sectionUuid.isBlank() && officialRef != null && officialRef.sectionId() != null) {
-                                        sectionUuid = officialRef.sectionId();
-                                    }
-
-                                    registerCourseRef(studentCode, cleanCourseName, officialSection, courseUuid, sectionUuid, null);
-                                    registerCourseRef(studentCode, courseNameRaw, officialSection, courseUuid, sectionUuid, null);
-
-                                    long startEpoch = cls.path("start").asLong();
-                                    long endEpoch = cls.path("end").asLong();
-                                    String descAmb = cls.path("descAmb").asText();
-                                    String instructionMode = cls.path("instructionMode").asText("P");
-                                    String linkZoom = cls.hasNonNull("linkZoom") ? cls.path("linkZoom").asText() : null;
-
-                                    JsonNode prof = cls.path("professors");
-                                    String teacher = "";
-                                    if (prof.isArray() && !prof.isEmpty()) {
-                                        JsonNode p0 = prof.get(0);
-                                        teacher = formatName(p0.path("firstName").asText() + " " + p0.path("lastName").asText());
-                                    } else if (prof.hasNonNull("firstName")) {
-                                        teacher = formatName(prof.path("firstName").asText() + " " + prof.path("lastName").asText());
-                                    }
-
-                                    JsonNode loc = cls.path("location");
-                                    JsonNode classRoom = loc.path("classRoom");
-                                    JsonNode building = loc.path("building");
-
-                                    String roomId = classRoom.path("id").asText();
-                                    String floor = classRoom.path("floor").asText();
-                                    String bldgId = building.path("id").asText();
-                                    String bldgDesc = buildingCache.getOrDefault(bldgId, bldgId);
-                                    if (bldgDesc == null || bldgDesc.isBlank()) {
-                                        bldgDesc = building.path("desc").asText(bldgId);
-                                    }
-                                    if (bldgDesc == null || bldgDesc.isBlank()) {
-                                        bldgDesc = !bldgId.isBlank() ? bldgId : "Pabellón UTP";
-                                    }
-
-                                    // Un curso VT es asíncrono: se registra en 'courses' con todos sus
-                                    // metadatos, pero NUNCA se emite como sesión de calendario. Así se
-                                    // erradica el ×17 generado por el barrido de 18 semanas.
-                                    ModalityType sessionModality = officialRef != null
-                                            && officialRef.modality() != ModalityType.UNKNOWN
-                                            ? officialRef.modality() : ModalityType.from(instructionMode);
-                                    boolean asyncVirtual = sessionModality.isAsyncVirtual();
-
-                                    if (!coursesMap.containsKey(cleanCourseName)) {
-                                        coursesMap.put(cleanCourseName, Course.builder()
-                                                .id("c-" + cleanCourseName.toLowerCase().replaceAll("[^a-z0-9]", "-"))
-                                                .code(officialCode)
-                                                .name(cleanCourseName)
-                                                .section(officialSection)
-                                                .sectionId(sectionUuid.isBlank() ? null : sectionUuid)
-                                                .modalityType(sessionModality)
-                                                .classLink(linkCourseClass)
-                                                .credits(3)
-                                                .teacher(teacher)
-                                                .modality(asyncVirtual ? "Virtual 24/7"
-                                                        : (instructionMode.equals("P") ? "Presencial" : "Remoto Zoom"))
-                                                .weeklyHours(4)
-                                                .build());
-                                    } else {
-                                        Course existing = coursesMap.get(cleanCourseName);
-                                        boolean needsTeacher = (existing.getTeacher() == null || existing.getTeacher().isBlank()) && !teacher.isBlank();
-                                        boolean needsCode = existing.getCode() == null && officialCode != null;
-                                        boolean needsSection = (existing.getSection() == null || existing.getSection().isBlank()) && !officialSection.isBlank();
-                                        boolean needsClassLink = existing.getClassLink() == null && linkCourseClass != null;
-                                        if (needsTeacher || needsCode || needsSection || needsClassLink) {
-                                            coursesMap.put(cleanCourseName, Course.builder()
-                                                    .id(existing.getId())
-                                                    .code(needsCode ? officialCode : existing.getCode())
-                                                    .name(existing.getName())
-                                                    .section(needsSection ? officialSection : existing.getSection())
-                                                    .sectionId(existing.getSectionId() != null ? existing.getSectionId()
-                                                            : (sectionUuid.isBlank() ? null : sectionUuid))
-                                                    .modalityType(sessionModality)
-                                                    .classLink(needsClassLink ? linkCourseClass : existing.getClassLink())
-                                                    .credits(existing.getCredits())
-                                                    .teacher(needsTeacher ? teacher : existing.getTeacher())
-                                                    .modality(existing.getModality())
-                                                    .weeklyHours(existing.getWeeklyHours())
-                                                    .build());
-                                        }
-                                    }
-
-                                    if (asyncVirtual) {
-                                        continue;
-                                    }
-
-                                    LocalDateTime startAt = LocalDateTime.ofInstant(Instant.ofEpochMilli(startEpoch), ZoneId.of("America/Lima"));
-                                    LocalDateTime finishAt = LocalDateTime.ofInstant(Instant.ofEpochMilli(endEpoch), ZoneId.of("America/Lima"));
-
-                                    ClassSession session = ClassSession.builder()
-                                            .id(classId.isBlank() ? "gql-" + startEpoch : classId)
-                                            .courseCode(officialCode)
-                                            .courseName(cleanCourseName)
-                                            .section(officialSection)
-                                            .sectionId(sectionUuid.isBlank() ? null : sectionUuid)
-                                            .modalityType(sessionModality)
-                                            .classroom(roomId.isBlank() ? "Aula General" : roomId)
-                                            .building(bldgDesc)
-                                            .floor(floor)
-                                            .environmentType(descAmb)
-                                            .teacher(teacher)
-                                            .modality(instructionMode)
-                                            .startAt(startAt)
-                                            .finishAt(finishAt)
-                                            .zoomLink(linkZoom)
-                                            .classLink(linkCourseClass)
-                                            .build();
-
-                                    allClasses.add(session);
-                                }
-                            }
-                        }
+                    for (JsonNode item : items) {
+                        handleParsedItem(parser.parse(item), sectionCatalog, allClasses, coursesMap,
+                                rejectedCountRef, unresolvedBuildingRef);
                     }
-                } else if (resp.statusCode() == 401 || resp.statusCode() == 403) {
-                    throw new AuthenticationException(
-                            "Sesión institucional UTP expirada o no autorizada en Portal GraphQL (HTTP " + resp.statusCode() + ").");
-                } else if (resp.statusCode() >= 500) {
-                    lastFailure = new UpstreamServiceException(
-                            "El Portal UTP no está disponible (HTTP " + resp.statusCode() + ") al consultar la semana " + (w + 1) + ".");
-                } else {
-                    lastFailure = new UpstreamServiceException(
-                            "Respuesta inesperada del Portal UTP (HTTP " + resp.statusCode() + ") al consultar la semana " + (w + 1) + ".");
                 }
             } catch (AuthenticationException e) {
                 throw e;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new UpstreamServiceException("Consulta de horario interrumpida.", e);
             } catch (Exception e) {
                 lastFailure = new UpstreamServiceException(
-                        "Error de conexión al consultar la semana " + (w + 1) + " en el Portal UTP: " + e.getMessage(), e);
+                        "Error de conexión al consultar la semana " + (w + 1) + " en el Portal UTP: "
+                                + e.getMessage(), e);
                 log.warn("[UTP Portal GraphQL] Falló consulta de semana {}: {}", w + 1, e.getMessage());
             }
         }
 
-        if (allClasses.isEmpty()) {
-            if (lastFailure != null) {
-                throw new UpstreamServiceException(
-                        "No se pudo consultar el horario en el Portal UTP: " + lastFailure.getMessage(), lastFailure);
-            }
-            return null;
+        if (allClasses.isEmpty() && coursesMap.isEmpty() && lastFailure != null) {
+            throw new UpstreamServiceException(
+                    "No se pudo consultar el horario en el Portal UTP: " + lastFailure.getMessage(), lastFailure);
         }
 
-        boolean isPartial = dashboardUpstreamFailed;
-        String enrichmentStatus = isPartial ? "PARTIAL" : "COMPLETE";
+        int rejected = rejectedCountRef.get();
+        int unresolvedBuildings = unresolvedBuildingRef.get();
+        // Cualquier fallo de red/GraphQL en alguna semana, además de los rechazos y
+        // edificios sin resolver, obliga a declarar el horario como PARTIAL.
+        boolean isPartial = dashboardUpstreamFailed || rejected > 0 || unresolvedBuildings > 0
+                || lastFailure != null;
+        if (isPartial) {
+            log.warn("[UtpPortalGatewayAdapter] Horario enriquecido parcialmente: dashboardFailed={}, "
+                    + "rejectedItems={}, unresolvedBuildings={}, weekFailure={}",
+                    dashboardUpstreamFailed, rejected, unresolvedBuildings, lastFailure != null);
+        }
 
+        String effectivePeriodName = (period != null && !period.isBlank()) ? period : periodInfo.name();
         return ScheduleInterval.builder()
                 .id("interval-graphql-" + currentWeekCalc)
-                .periodName("2026 - Ciclo 2 Agosto")
+                .periodName(effectivePeriodName)
                 .weekNumber(currentWeekCalc)
                 .totalWeeks(18)
-                .startDate(LocalDate.of(2026, 8, 10))
-                .endDate(LocalDate.of(2026, 8, 10).plusWeeks(18))
+                .startDate(periodStartDate)
+                .endDate(periodStartDate.plusWeeks(18))
                 .courses(new ArrayList<>(coursesMap.values()))
                 .classes(allClasses)
-                .enrichmentStatus(enrichmentStatus)
+                .enrichmentStatus(isPartial ? "PARTIAL" : "COMPLETE")
                 .build();
     }
 
+    private void handleParsedItem(ScheduleItemParsingResult result,
+                                  Map<String, Course> sectionCatalog,
+                                  List<ClassSession> allClasses,
+                                  Map<String, Course> coursesMap,
+                                  java.util.concurrent.atomic.AtomicInteger rejectedCount,
+                                  java.util.concurrent.atomic.AtomicInteger unresolvedBuildings) {
+        if (result instanceof ScheduleItemParsingResult.Session s) {
+            ClassSession session = s.session();
+            allClasses.add(session);
+            if (session.getBuildingId() != null && session.getBuilding() == null) {
+                unresolvedBuildings.incrementAndGet();
+            }
+            coursesMap.putIfAbsent(session.getCourseName(), Course.builder()
+                    .id("c-" + (session.getCourseName() == null ? "" :
+                            session.getCourseName().toLowerCase().replaceAll("[^a-z0-9]", "-")))
+                    .code(session.getCourseCode())
+                    .name(session.getCourseName())
+                    .section(session.getSection())
+                    .sectionId(session.getSectionId())
+                    .modalityType(session.getModalityType())
+                    .teacher(session.getTeacher())
+                    .modality(session.getModality())
+                    .build());
+        } else if (result instanceof ScheduleItemParsingResult.AsyncCourseRef a) {
+            Course ref = a.sectionId() != null ? sectionCatalog.get(a.sectionId()) : null;
+            coursesMap.putIfAbsent(a.name(), Course.builder()
+                    .id("c-" + (a.name() == null ? "" : a.name().toLowerCase().replaceAll("[^a-z0-9]", "-")))
+                    .code(a.courseCode() != null ? a.courseCode() : (ref != null ? ref.getCode() : null))
+                    .name(a.name())
+                    .section(ref != null ? ref.getSection() : null)
+                    .sectionId(a.sectionId())
+                    .classLink(a.classLink())
+                    .modalityType(ref != null ? ref.getModalityType() : com.utp.horario.domain.model.ModalityType.ASYNC_VIRTUAL)
+                    .modality("Virtual 24/7")
+                    .build());
+        } else if (result instanceof ScheduleItemParsingResult.Rejected r) {
+            log.warn("Sesión descartada por datos anómalos de UTP: {}", r.reason());
+            rejectedCount.incrementAndGet();
+        }
+    }
     private void ensureBuildingsLoaded(String token, String studentCode) {
         if (!buildingCache.isEmpty()) {
             return;
         }
-
         try {
             Map<String, Object> bodyObj = Map.of(
                     "operationName", "getBuildings",
                     "variables", Map.of(),
-                    "query", "query getBuildings {\n  buildings {\n    id\n    description\n    address\n  }\n}\n"
-            );
-
+                    "query", "query getBuildings {\n  buildings {\n    id\n    description\n    address\n  }\n}\n");
             HttpRequest req = HttpRequest.newBuilder()
                     .uri(URI.create(getPortalEndpoint()))
                     .timeout(Duration.ofSeconds(10))
@@ -1342,13 +871,12 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
 
             HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
             if (resp.statusCode() == 200) {
-                JsonNode root = objectMapper.readTree(resp.body());
-                JsonNode bArray = root.path("data").path("buildings");
+                JsonNode bArray = objectMapper.readTree(resp.body()).path("data").path("buildings");
                 if (bArray.isArray()) {
                     for (JsonNode b : bArray) {
                         String id = b.path("id").asText();
-                        String desc = b.path("description").asText();
-                        if (desc.isBlank()) desc = b.path("address").asText();
+                        String desc = b.path("description").asText("");
+                        if (desc.isBlank()) desc = b.path("address").asText("");
                         if (!id.isBlank() && !desc.isBlank()) {
                             buildingCache.put(id, desc);
                         }
@@ -1356,377 +884,12 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 }
             }
         } catch (Exception e) {
-            log.warn("[UTP Portal GraphQL] No se pudo cargar catálogo de pabellones: {}", e.getMessage());
+            // Un fallo del catálogo no invalida el horario: los ids crudos se conservan
+            // y enrichmentStatus se marca PARTIAL al detectar edificios no resueltos.
+            log.warn("[UTP Portal GraphQL] No se pudo cargar catálogo de edificios: {}", e.getMessage());
         }
     }
 
-    public static class CourseRef {
-        public final String courseName;
-        public final String numericSection;
-        public final String courseUuid;
-        public final String sectionUuid;
-        public final String syllabusUrl;
-
-        public CourseRef(String courseName, String numericSection, String courseUuid, String sectionUuid, String syllabusUrl) {
-            this.courseName = courseName;
-            this.numericSection = numericSection != null ? numericSection : "";
-            this.courseUuid = courseUuid != null ? courseUuid : "";
-            this.sectionUuid = sectionUuid != null ? sectionUuid : "";
-            this.syllabusUrl = syllabusUrl != null ? syllabusUrl : "";
-        }
-    }
-
-    private final Map<String, Map<String, CourseRef>> userCourseRefMap = new ConcurrentHashMap<>();
-
-    private void registerCourseRef(String studentCode, String name, String numericSection, String courseUuid, String sectionUuid, String syllabusUrl) {
-        if (name == null || name.isBlank()) return;
-        // Sin identidad de estudiante no se registra el mapeo: evita un bucket "compartido"
-        // que podría devolver secciones de otro alumno.
-        if (studentCode == null || studentCode.isBlank()) {
-            log.debug("[UtpPortalGatewayAdapter] Mapeo de curso descartado por ausencia de identidad del estudiante");
-            return;
-        }
-        String userKey = studentCode.toLowerCase();
-        Map<String, CourseRef> courseRefMap = userCourseRefMap.computeIfAbsent(userKey, k -> new ConcurrentHashMap<>());
-
-        CourseRef ref = new CourseRef(name, numericSection, courseUuid, sectionUuid, syllabusUrl);
-        String raw = name.trim().toUpperCase();
-        String norm = normalizeSearchKey(raw);
-        courseRefMap.put(raw, ref);
-        courseRefMap.put(norm, ref);
-        if (numericSection != null && !numericSection.isBlank() && numericSection.matches("^\\d+$")) {
-            courseRefMap.put(numericSection, ref);
-        }
-        if (sectionUuid != null && !sectionUuid.isBlank()) {
-            courseRefMap.put(sectionUuid.toLowerCase(), ref);
-        }
-        if (courseUuid != null && !courseUuid.isBlank()) {
-            courseRefMap.put(courseUuid.toLowerCase(), ref);
-        }
-    }
-
-    private CourseRef findCourseRef(String studentCode, String courseCodeOrName) {
-        if (courseCodeOrName == null || courseCodeOrName.isBlank()) return null;
-        // Sin identidad de estudiante no se resuelve ningún mapeo (evita cruces de identidad).
-        if (studentCode == null || studentCode.isBlank()) return null;
-        String userKey = studentCode.toLowerCase();
-        Map<String, CourseRef> courseRefMap = userCourseRefMap.get(userKey);
-        if (courseRefMap == null || courseRefMap.isEmpty()) return null;
-
-        String raw = courseCodeOrName.trim().toUpperCase();
-        CourseRef ref = courseRefMap.get(raw);
-        if (ref != null) return ref;
-
-        String norm = normalizeSearchKey(raw);
-        ref = courseRefMap.get(norm);
-        if (ref != null) return ref;
-
-        for (Map.Entry<String, CourseRef> entry : courseRefMap.entrySet()) {
-            String kNorm = normalizeSearchKey(entry.getKey());
-            if (kNorm.contains(norm) || norm.contains(kNorm)) {
-                return entry.getValue();
-            }
-        }
-        return null;
-    }
-
-    private void populateCourseSectionsFromPao(String token) {
-        if (token == null || token.isBlank()) return;
-        try {
-            String userId = extractUserIdFromToken(token);
-            String tenantId = extractTenantIdFromToken(token);
-
-            if (userId.isBlank()) {
-                return;
-            }
-
-            // 1. Sincronizar secciones desde calendario PAO
-            String dateToQuery = LocalDate.now().toString() + " 00:00:00";
-            String url = getPaoEndpoint("/course/student/calendar?userId=")
-                    + URLEncoder.encode(userId, StandardCharsets.UTF_8)
-                    + "&dateToQuery=" + URLEncoder.encode(dateToQuery, StandardCharsets.UTF_8)
-                    + "&intervalMode=period";
-
-            HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create(url))
-                    .timeout(Duration.ofSeconds(10))
-                    .header("Authorization", token.startsWith("Bearer ") ? token : "Bearer " + token)
-                    .header("x-tenant-id", tenantId)
-                    .header("user-id", userId)
-                    .header("user-id-to-access", "")
-                    .header("user-role", "STUDENT")
-                    .header("user-role-to-access", "")
-                    .header("transaction-id", java.util.UUID.randomUUID().toString())
-                    .header("origin", "https://class.utp.edu.pe")
-                    .header("referer", "https://class.utp.edu.pe/")
-                    .header("Accept", "application/json, text/plain, */*")
-                    .GET()
-                    .build();
-
-            HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
-            if (resp.statusCode() == 200) {
-                rememberResolvedPaoUserId(token, userId);
-                JsonNode root = objectMapper.readTree(resp.body());
-                JsonNode events = root.path("data").path("current_interval").path("events");
-                if (events.isArray()) {
-                    for (JsonNode ev : events) {
-                        String rawTitle = ev.path("title").asText();
-                        ParsedTitle pt = parseTitle(rawTitle);
-                        String courseId = ev.path("metadata").path("courseId").asText();
-                        String secMeta = ev.path("metadata").path("sectionId").asText();
-                        String syllabusUrl = ev.path("metadata").path("syllabusUrl").asText("");
-                        
-                        String numericSection = pt.sectionCode;
-                        String courseUuid = courseId.matches("^[0-9a-fA-F-]{36}$") ? courseId : "";
-                        String sectionUuid = secMeta.matches("^[0-9a-fA-F-]{36}$") ? secMeta : "";
-                        if (numericSection.isBlank() && secMeta.matches("^\\d+$")) {
-                            numericSection = secMeta;
-                        }
-
-                        String studentCode = extractStudentCodeFromToken(token);
-                        registerCourseRef(studentCode, pt.cleanTitle, numericSection, courseUuid, sectionUuid, syllabusUrl);
-                        registerCourseRef(studentCode, rawTitle, numericSection, courseUuid, sectionUuid, syllabusUrl);
-                        if (!courseId.isBlank()) registerCourseRef(studentCode, courseId, numericSection, courseUuid, sectionUuid, syllabusUrl);
-                    }
-                }
-            }
-
-            log.info("[UTP PAO Gateway] Mapeadas referencias de asignaturas en memoria para alumno");
-        } catch (Exception e) {
-            log.warn("[UTP PAO Gateway] No se pudieron sincronizar secciones desde PAO: {}", e.getMessage());
-        }
-    }
-
-    private String normalizeSearchKey(String str) {
-        if (str == null) return "";
-        return java.text.Normalizer.normalize(str, java.text.Normalizer.Form.NFD)
-                .replaceAll("\\p{M}", "")
-                .replaceAll("[^a-zA-Z0-9]", "")
-                .toUpperCase();
-    }
-
-    private ScheduleInterval parsePaoCalendarResponse(JsonNode intervalNode, String studentCode, String token) {
-        JsonNode events = intervalNode.path("events");
-        boolean hasEvents = events.isArray() && !events.isEmpty();
-
-        // Catálogo institucional: misma resolución del Checkpoint 1/2 de la bitácora con aislamiento resiliente.
-        List<DashboardCourseRef> dashboard;
-        boolean dashboardUpstreamFailed = false;
-        try {
-            dashboard = loadDashboardCourses(token);
-        } catch (RuntimeException e) {
-            dashboardUpstreamFailed = true;
-            if (!hasEvents && isDashboardFailure(e)) {
-                // Si no hay eventos reales y el dashboard falló con 5xx/4xx, propagar para evitar falso horario vacío
-                throw e;
-            }
-            log.warn("[UtpPortalGatewayAdapter] No se pudo cargar dashboard-courses en parsePaoCalendarResponse ({}). Continuando con degradación parcial.", e.toString());
-            dashboard = Collections.emptyList();
-        }
-        Map<String, DashboardCourseRef> dashboardBySectionId = dashboard.stream()
-                .filter(r -> r.sectionId() != null && !r.sectionId().isBlank())
-                .collect(Collectors.toMap(DashboardCourseRef::sectionId, r -> r, (a, b) -> a, LinkedHashMap::new));
-
-        String periodName = intervalNode.path("period_name").asText("2026 - Ciclo 2 Agosto");
-        int weekNumber = intervalNode.path("week_number").asInt(1);
-        int totalWeeks = intervalNode.path("total_weeks").asInt(18);
-
-        List<ClassSession> classes = new ArrayList<>();
-        List<Course> courses = new ArrayList<>();
-        List<String> seenCourseIds = new ArrayList<>();
-
-        if (events.isArray()) {
-            for (JsonNode ev : events) {
-                boolean isLongLasting = ev.path("isLongLasting").asBoolean(false);
-                if (isLongLasting) {
-                    continue;
-                }
-
-                String id = ev.path("id").asText();
-                String rawTitle = ev.path("title").asText();
-                String modality = ev.path("modality").asText("P");
-                String startAtStr = ev.path("startAt").asText();
-                String finishAtStr = ev.path("finishAt").asText();
-                String zoomLink = ev.path("metadata").path("zoomLink").asText(null);
-                String courseId = ev.path("metadata").path("courseId").asText("");
-                String sectionId = ev.path("metadata").path("sectionId").asText("");
-                String syllabusUrl = ev.path("metadata").path("syllabusUrl").asText("");
-                String courseClassLink = ev.path("metadata").path("classLink").asText(null);
-
-                ParsedTitle parsed = parseTitle(rawTitle);
-                ClassroomLocation loc = getClassroomLocation(parsed.cleanTitle, parsed.sectionCode);
-
-                String courseUuid = courseId.matches("^[0-9a-fA-F-]{36}$") ? courseId : "";
-                String sectionUuid = sectionId.matches("^[0-9a-fA-F-]{36}$") ? sectionId : "";
-                String finalSection = !parsed.sectionCode.isBlank() ? parsed.sectionCode : (sectionId.matches("^\\d+$") ? sectionId : "");
-
-                DashboardCourseRef officialRef = dashboardBySectionId.get(sectionUuid);
-                String officialCode = officialRef != null ? officialRef.courseCode() : null;
-                if (officialCode == null) {
-                    officialCode = validCatalogCode(resolveCourseCode(sectionUuid, parsed.cleanTitle, token));
-                }
-                String officialSection = officialRef != null && officialRef.classNumber() != null
-                        && !officialRef.classNumber().isBlank() ? officialRef.classNumber() : finalSection;
-                ModalityType sessionModality = officialRef != null && officialRef.modality() != ModalityType.UNKNOWN
-                        ? officialRef.modality() : ModalityType.from(modality);
-                boolean asyncVirtual = sessionModality.isAsyncVirtual();
-
-                registerCourseRef(studentCode, parsed.cleanTitle, officialSection, courseUuid, sectionUuid, syllabusUrl);
-                registerCourseRef(studentCode, rawTitle, officialSection, courseUuid, sectionUuid, syllabusUrl);
-                if (!courseId.isBlank()) registerCourseRef(studentCode, courseId, officialSection, courseUuid, sectionUuid, syllabusUrl);
-
-                // El curso se registra SIEMPRE en 'courses', también si es VT asíncrono.
-                if (!seenCourseIds.contains(parsed.cleanTitle)) {
-                    seenCourseIds.add(parsed.cleanTitle);
-                    courses.add(Course.builder()
-                            .id("c-" + parsed.cleanTitle.toLowerCase().replaceAll("[^a-z0-9]", "-"))
-                            .code(officialCode)
-                            .name(parsed.cleanTitle)
-                            .section(officialSection)
-                            .sectionId(sectionUuid.isBlank() ? null : sectionUuid)
-                            .classLink(courseClassLink)
-                            .modalityType(sessionModality)
-                            .credits(3)
-                            .modality(asyncVirtual ? "Virtual 24/7"
-                                    : (modality.equals("P") ? "Presencial" : "Remoto Zoom"))
-                            .weeklyHours(4)
-                            .build());
-                }
-
-                // Ninguna sesión para cursos VT: el array 'classes' queda vacío para ellos.
-                if (asyncVirtual) {
-                    continue;
-                }
-
-                // Parsing defensivo de marcas de tiempo: un formato inesperado del proveedor
-                // no debe abortar la sincronización completa del horario.
-                LocalDateTime startAt = parseLocalDateTimeSafe(startAtStr);
-                LocalDateTime finishAt = parseLocalDateTimeSafe(finishAtStr);
-
-                classes.add(ClassSession.builder()
-                        .id(id)
-                        .courseCode(officialCode)
-                        .courseName(parsed.cleanTitle)
-                        .section(officialSection)
-                        .sectionId(sectionUuid.isBlank() ? null : sectionUuid)
-                        .modalityType(sessionModality)
-                        .classroom(loc.aula)
-                        .building(loc.pabellon)
-                        .floor("")
-                        .environmentType(modality.equals("P") ? "AULA TEÓRICA" : "AULA VIRTUAL")
-                        .teacher("")
-                        .modality(modality)
-                        .startAt(startAt)
-                        .finishAt(finishAt)
-                        .zoomLink(zoomLink)
-                        .build());
-            }
-        }
-
-        boolean isPartial = dashboardUpstreamFailed;
-        String enrichmentStatus = isPartial ? "PARTIAL" : "COMPLETE";
-
-        return ScheduleInterval.builder()
-                .id("interval-live-" + weekNumber)
-                .periodName(periodName)
-                .weekNumber(weekNumber)
-                .totalWeeks(totalWeeks)
-                .startDate(LocalDate.now().minusWeeks(weekNumber - 1))
-                .endDate(LocalDate.now().plusWeeks(totalWeeks - weekNumber))
-                .courses(courses)
-                .classes(classes)
-                .enrichmentStatus(enrichmentStatus)
-                .build();
-    }
-
-    /**
-     * Parseo defensivo de {@link LocalDateTime} tolerante a los formatos Emitidos por el
-     * calendario PAO ({@code yyyy-MM-dd HH:mm:ss}, ISO-8601, con o sin milisegundos).
-     *
-     * @return el instante parseado o {@code null} si el valor es nulo o tiene un formato no reconocido.
-     */
-    private LocalDateTime parseLocalDateTimeSafe(String rawValue) {
-        if (rawValue == null || rawValue.isBlank()) {
-            return null;
-        }
-        String normalized = rawValue.trim().replace(" ", "T");
-        try {
-            return LocalDateTime.parse(normalized);
-        } catch (Exception ignored) {
-            // Continúa con los formatos alternativos
-        }
-        try {
-            return LocalDateTime.parse(normalized, java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS"));
-        } catch (Exception ignored) {
-            // Continúa con el último intento
-        }
-        try {
-            return LocalDateTime.parse(normalized, java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"));
-        } catch (Exception ignored) {
-            log.warn("[UtpPortalGatewayAdapter] Marca de tiempo con formato no reconocido: '{}'", rawValue);
-            return null;
-        }
-    }
-
-    private static class ParsedTitle {
-        String cleanTitle;
-        String sectionCode = "";
-    }
-
-    private ParsedTitle parseTitle(String raw) {
-        ParsedTitle pt = new ParsedTitle();
-        String title = raw.trim();
-
-        // Extraer sección (e.g. (45104))
-        Pattern pSec = Pattern.compile("\\(\\s*(\\d+)\\s*\\)");
-        Matcher mSec = pSec.matcher(title);
-        if (mSec.find()) {
-            pt.sectionCode = mSec.group(1);
-            title = title.replace(mSec.group(0), "").trim();
-        }
-
-        // Limpiar (Semana X) y sufijos de día (únicamente nombres de día reales)
-        title = title.replaceAll("(?i)\\(\\s*semana\\s*\\d+\\s*\\)", "").trim();
-        title = title.replaceAll("(?i)-\\s*(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo|sesi[oó]n)$", "").trim();
-
-        // Formato capitalizado de nombre de curso
-        pt.cleanTitle = formatCourseName(title);
-        return pt;
-    }
-
-    private String formatCourseName(String raw) {
-        if (raw == null || raw.isBlank()) return "";
-        String[] words = raw.trim().split("\\s+");
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < words.length; i++) {
-            String w = words[i].toLowerCase();
-            if (w.equalsIgnoreCase("ti") || w.equalsIgnoreCase("ia") || w.equalsIgnoreCase("aws") || w.equalsIgnoreCase("utp")) {
-                sb.append(w.toUpperCase());
-            } else if (i > 0 && (w.equals("de") || w.equals("del") || w.equals("la") || w.equals("para") || w.equals("por") || w.equals("en") || w.equals("y") || w.equals("e"))) {
-                sb.append(w);
-            } else if (!w.isEmpty()) {
-                sb.append(Character.toUpperCase(w.charAt(0))).append(w.substring(1));
-            }
-            if (i < words.length - 1) sb.append(" ");
-        }
-        return sb.toString().replace("- ", "- ").trim();
-    }
-
-    private String formatName(String raw) {
-        if (raw == null || raw.isBlank()) return "";
-        String[] parts = raw.trim().split("\\s+");
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < parts.length; i++) {
-            String p = parts[i].toLowerCase();
-            if (!p.isEmpty()) {
-                sb.append(Character.toUpperCase(p.charAt(0))).append(p.substring(1));
-            }
-            if (i < parts.length - 1) sb.append(" ");
-        }
-        return sb.toString();
-    }
-
-    @Override
     public String fetchSyllabusPdfText(String token, String courseCodeOrUrl) {
         if (courseCodeOrUrl == null || courseCodeOrUrl.isBlank()) {
             return "";
@@ -1751,78 +914,104 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 String userId = extractUserIdFromToken(effectiveToken);
                 String tenantId = extractTenantIdFromToken(effectiveToken);
 
-                String studentCode = extractStudentCodeFromToken(effectiveToken);
-                CourseRef ref = findCourseRef(studentCode, pdfUrl);
-                if (ref == null || (ref.syllabusUrl.isBlank() && ref.numericSection.isBlank() && ref.courseUuid.isBlank())) {
-                    populateCourseSectionsFromPao(effectiveToken);
-                    ref = findCourseRef(studentCode, pdfUrl);
+                // Resolución directa desde el catálogo institucional: sin mapas de
+                // referencias persistentes ni sondas de identidad.
+                List<DashboardCourseRef> catalog = loadDashboardCourses(effectiveToken);
+                String normalizedTarget = CourseNameNormalizer.normalize(pdfUrl);
+                DashboardCourseRef matchedRef = null;
+
+                for (DashboardCourseRef ref : catalog) {
+                    String code = ref.courseCode() != null ? ref.courseCode() : "";
+                    String name = ref.name() != null ? ref.name() : "";
+                    String sId = ref.sectionId() != null ? ref.sectionId() : "";
+                    String cNum = ref.classNumber() != null ? ref.classNumber() : "";
+                    String sCode = ref.sectionCode() != null ? ref.sectionCode() : "";
+
+                    if (pdfUrl.equalsIgnoreCase(sId)
+                            || normalizedTarget.equals(code)
+                            || normalizedTarget.equals(CourseNameNormalizer.normalize(name))
+                            || pdfUrl.equals(cNum)
+                            || pdfUrl.equalsIgnoreCase(sCode)) {
+                        matchedRef = ref;
+                        break;
+                    }
                 }
 
-                if (ref != null && !ref.syllabusUrl.isBlank()) {
-                    pdfUrl = ref.syllabusUrl;
-                    log.info("[UtpPortalGatewayAdapter] URL directa de sílabo obtenida de CourseRef: {}", pdfUrl);
-                } else {
-                    String syllabusApiUrl = null;
-                    if (ref != null && !ref.courseUuid.isBlank() && !ref.sectionUuid.isBlank()) {
-                        syllabusApiUrl = getPaoEndpoint("/course/student/courses/" 
-                                + ref.courseUuid + "/sections/" + ref.sectionUuid + "/syllabus");
-                    } else {
-                        String targetSec = (ref != null && !ref.numericSection.isBlank()) ? ref.numericSection : pdfUrl;
-                        if (targetSec.matches("^\\d+$")) {
-                            syllabusApiUrl = getPaoEndpoint("/course/student/sections/" 
-                                    + URLEncoder.encode(targetSec, StandardCharsets.UTF_8) + "/syllabus");
-                        }
+                String syllabusApiUrl = null;
+                if (matchedRef != null && matchedRef.courseId() != null && !matchedRef.courseId().isBlank()
+                        && matchedRef.sectionId() != null && !matchedRef.sectionId().isBlank()) {
+                    // Checkpoint §4.4: /course/student/courses/{courseId}/sections/{sectionId}/syllabus
+                    syllabusApiUrl = getPaoEndpoint("/course/student/courses/"
+                            + URLEncoder.encode(matchedRef.courseId().trim(), StandardCharsets.UTF_8)
+                            + "/sections/"
+                            + URLEncoder.encode(matchedRef.sectionId().trim(), StandardCharsets.UTF_8)
+                            + "/syllabus");
+                } else if (matchedRef != null && matchedRef.classNumber() != null && !matchedRef.classNumber().isBlank()) {
+                    syllabusApiUrl = getPaoEndpoint("/course/student/sections/"
+                            + URLEncoder.encode(matchedRef.classNumber().trim(), StandardCharsets.UTF_8) + "/syllabus");
+                } else if (pdfUrl.matches("^\\d+$")) {
+                    syllabusApiUrl = getPaoEndpoint("/course/student/sections/"
+                            + URLEncoder.encode(pdfUrl.trim(), StandardCharsets.UTF_8) + "/syllabus");
+                }
+
+                if (syllabusApiUrl != null) {
+                    log.info("[UtpPortalGatewayAdapter] Consultando endpoint de sílabo PAO: {} (userId='{}')", syllabusApiUrl, userId);
+                    HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
+                            .uri(URI.create(syllabusApiUrl))
+                            .timeout(Duration.ofSeconds(10))
+                            .header("accept", "*/*")
+                            .header("x-tenant-id", tenantId)
+                            .header("user-id", userId)
+                            .header("user-id-to-access", "")
+                            .header("user-role", "STUDENT")
+                            .header("user-role-to-access", "")
+                            .header("transaction-id", java.util.UUID.randomUUID().toString())
+                            .header("origin", "https://class.utp.edu.pe")
+                            .header("referer", "https://class.utp.edu.pe/");
+
+                    if (effectiveToken != null && !effectiveToken.isBlank()) {
+                        reqBuilder.header("authorization", effectiveToken.startsWith("Bearer ") ? effectiveToken : "Bearer " + effectiveToken);
                     }
 
-                    if (syllabusApiUrl != null) {
-                        log.info("[UtpPortalGatewayAdapter] Consultando endpoint de sílabo PAO: {} (userId='{}')", syllabusApiUrl, userId);
-                        HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
-                                .uri(URI.create(syllabusApiUrl))
-                                .timeout(Duration.ofSeconds(10))
-                                .header("accept", "*/*")
-                                .header("x-tenant-id", tenantId)
-                                .header("user-id", userId)
-                                .header("user-id-to-access", "")
-                                .header("user-role", "STUDENT")
-                                .header("user-role-to-access", "")
-                                .header("transaction-id", java.util.UUID.randomUUID().toString())
-                                .header("origin", "https://class.utp.edu.pe")
-                                .header("referer", "https://class.utp.edu.pe/");
+                    HttpResponse<String> res = httpClient.send(reqBuilder.GET().build(), HttpResponse.BodyHandlers.ofString());
 
-                        if (effectiveToken != null && !effectiveToken.isBlank()) {
-                            reqBuilder.header("authorization", effectiveToken.startsWith("Bearer ") ? effectiveToken : "Bearer " + effectiveToken);
+                    // Fallback de contingencia: si la ruta jerárquica canónica respondió 404 y se dispone de un classNumber numérico
+                    if (res.statusCode() == 404 && matchedRef != null && matchedRef.classNumber() != null
+                            && matchedRef.classNumber().matches("^\\d+$")
+                            && syllabusApiUrl.contains("/courses/")) {
+                        String fallbackUrl = getPaoEndpoint("/course/student/sections/"
+                                + URLEncoder.encode(matchedRef.classNumber().trim(), StandardCharsets.UTF_8) + "/syllabus");
+                        log.info("[UtpPortalGatewayAdapter] Intento con ruta de contingencia PAO: {}", fallbackUrl);
+                        reqBuilder.uri(URI.create(fallbackUrl));
+                        res = httpClient.send(reqBuilder.GET().build(), HttpResponse.BodyHandlers.ofString());
+                    }
+
+                    if (res.statusCode() == 200) {
+                        JsonNode node = objectMapper.readTree(res.body());
+                        if (node.has("errors")) {
+                            throw new UpstreamServiceException("PAO devolvió errores al resolver el sílabo de " + courseCodeOrUrl + ".");
                         }
-
-                        HttpResponse<String> res = httpClient.send(reqBuilder.GET().build(), HttpResponse.BodyHandlers.ofString());
-                        if (res.statusCode() == 200) {
-                            rememberResolvedPaoUserId(effectiveToken, userId);
-                            JsonNode node = objectMapper.readTree(res.body());
-                            if (node.has("errors")) {
-                                throw new UpstreamServiceException("PAO devolvió errores al resolver el sílabo de " + courseCodeOrUrl + ".");
-                            }
-                            if (node.path("data").hasNonNull("syllabusUrl")) {
-                                pdfUrl = node.path("data").path("syllabusUrl").asText();
-                                log.info("[UtpPortalGatewayAdapter] URL de sílabo obtenida desde PAO API: {}", pdfUrl);
-                            } else {
-                                throw new ResourceNotFoundException(
-                                        "PAO no publicó una URL de sílabo para el curso solicitado: " + courseCodeOrUrl);
-                            }
-                        } else if (res.statusCode() == 401 || res.statusCode() == 403) {
-                            invalidatePaoUserId(extractStudentCodeFromToken(effectiveToken), userId);
-                            log.warn("[UtpPortalGatewayAdapter] Descarga de sílabo rechazada por PAO (HTTP {})", res.statusCode());
-                            throw new AuthenticationException(
-                                    "Sesión institucional UTP expirada o no autorizada para resolver el sílabo (HTTP " + res.statusCode() + ").");
-                        } else if (res.statusCode() == 404) {
-                            throw new ResourceNotFoundException(
-                                    "PAO no encontró el sílabo solicitado: " + courseCodeOrUrl);
+                        if (node.path("data").hasNonNull("syllabusUrl")) {
+                            pdfUrl = node.path("data").path("syllabusUrl").asText();
+                            log.info("[UtpPortalGatewayAdapter] URL de sílabo obtenida desde PAO API: {}", pdfUrl);
                         } else {
-                            log.warn("[UtpPortalGatewayAdapter] Respuesta no exitosa ({}) de PAO syllabus para {}", res.statusCode(), syllabusApiUrl);
-                            throw new UpstreamServiceException(
-                                    "PAO respondió con error HTTP " + res.statusCode() + " al resolver el sílabo.");
+                            throw new ResourceNotFoundException(
+                                    "PAO no publicó una URL de sílabo para el curso solicitado: " + courseCodeOrUrl);
                         }
+                    } else if (res.statusCode() == 401 || res.statusCode() == 403) {
+                        log.warn("[UtpPortalGatewayAdapter] Descarga de sílabo rechazada por PAO (HTTP {})", res.statusCode());
+                        throw new AuthenticationException(
+                                "Sesión institucional UTP expirada o no autorizada para resolver el sílabo (HTTP " + res.statusCode() + ").");
+                    } else if (res.statusCode() == 404) {
+                        throw new ResourceNotFoundException(
+                                "PAO no encontró el sílabo solicitado: " + courseCodeOrUrl);
+                    } else {
+                        log.warn("[UtpPortalGatewayAdapter] Respuesta no exitosa ({}) de PAO syllabus para {}", res.statusCode(), syllabusApiUrl);
+                        throw new UpstreamServiceException(
+                                "PAO respondió con error HTTP " + res.statusCode() + " al resolver el sílabo.");
                     }
                 }
-            }
+                }
 
             if (pdfUrl.startsWith("http://") || pdfUrl.startsWith("https://")) {
                 String safeUri = pdfUrl.replace(" ", "%20");
@@ -1866,7 +1055,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
     private final Map<String, String> courseNameToCourseCodeCache = new ConcurrentHashMap<>();
 
     /** Referencia institucional completa por sección, derivada del dashboard de UTP+ Class. */
-    private record DashboardCourseRef(String sectionId, String courseCode, String classNumber,
+    private record DashboardCourseRef(String courseId, String sectionId, String courseCode, String classNumber,
                                       String sectionCode, String name, ModalityType modality) {}
 
     /** Marcador para impedir que un fallo del catálogo se degrade a un horario vacío. */
@@ -1898,7 +1087,8 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
     public record CatalogCode(String value, Kind kind) {
         public enum Kind { REGULAR, WORKSHOP, OTHER }
 
-        private static final Pattern REGULAR_PATTERN = Pattern.compile("^100000[A-Z0-9]{4}$");
+        /** Ruptura 1: 5 o 6 dígitos iniciales y 4-5 alfanuméricos (THP 10000TE103 incluido). */
+        private static final Pattern REGULAR_PATTERN = Pattern.compile("^\\d{5,6}[A-Z0-9]{4,5}$");
         private static final Pattern WORKSHOP_PATTERN = Pattern.compile("^10000TE\\d{3}$");
         private static final Pattern GENERIC_PATTERN = Pattern.compile("^[A-Z0-9]{10}$");
 
@@ -1912,7 +1102,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         }
     }
 
-    private static final Pattern SECTION_EMBEDDED_PATTERN = Pattern.compile("(?i)(100000[A-Z0-9]{4}|10000TE\\d{3})");
+    private static final Pattern SECTION_EMBEDDED_PATTERN = Pattern.compile("(?i)(\\d{5,6}[A-Z0-9]{4,5})");
 
     private static String validCatalogCode(String candidate) {
         return CatalogCode.parse(candidate).map(CatalogCode::value).orElse(null);
@@ -1924,10 +1114,24 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
      * nunca se devuelve un catálogo simulado.
      */
     private List<DashboardCourseRef> loadDashboardCourses(String token) {
-        return loadDashboardCourses(token, null);
+        return loadDashboardCourses(token, (Set<String>) null);
     }
 
     private List<DashboardCourseRef> loadDashboardCourses(String token, String targetPeriod) {
+        Set<String> periods = null;
+        if (targetPeriod != null && !targetPeriod.isBlank()) {
+            periods = new LinkedHashSet<>();
+            String normalized = targetPeriod.matches("^\\d{4}$") ? targetPeriod.trim()
+                    : resolveCurrentAcademicPeriod(token).id();
+            if (normalized != null) {
+                periods.add(normalized);
+            }
+            periods.add("9999");
+        }
+        return loadDashboardCourses(token, periods);
+    }
+
+    private List<DashboardCourseRef> loadDashboardCourses(String token, Set<String> targetPeriods) {
         String effectiveToken = (token != null && token.startsWith("Bearer ")) ? token.substring(7).trim() : token;
         if (effectiveToken == null || effectiveToken.isBlank()) {
             throw new DashboardAuthException("Se requiere token de sesión UTP para resolver el catálogo de cursos.");
@@ -1950,6 +1154,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                     .header("origin", "https://class.utp.edu.pe")
                     .header("referer", "https://class.utp.edu.pe/")
                     .header("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                    .header("transaction-id", java.util.UUID.randomUUID().toString())
                     .GET()
                     .build();
             resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
@@ -1977,27 +1182,19 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 throw new DashboardUpstreamException("El dashboard de UTP+ Class no devolvió un arreglo de cursos.");
             }
 
-            // Normalizar targetPeriod a 4 dígitos para evitar descartar todo ante nombres descriptivos
-            String normalizedPeriod = null;
-            if (targetPeriod != null && !targetPeriod.isBlank()) {
-                if (targetPeriod.matches("^\\d{4}$")) {
-                    normalizedPeriod = targetPeriod;
-                } else if (targetPeriod.contains("2026") && targetPeriod.contains("2")) {
-                    normalizedPeriod = "2263";
-                }
-            }
-
             int totalItems = data.size();
             int parsedCount = 0;
             int omittedCount = 0;
             List<DashboardCourseRef> refs = new ArrayList<>();
 
             for (JsonNode c : data) {
+                String courseId = c.path("courseId").asText(null);
                 String sectionId = c.path("sectionId").asText(null);
                 String name = c.path("name").asText(null);
                 try {
-                    // Filtrar historial de periodos previos si se especificó periodo objetivo (ej. 2263 o talleres 9999)
-                    if (normalizedPeriod != null) {
+                    // Ruptura 5: conjunto compuesto {periodo actual, 9999}. Nunca se filtra
+                    // por `active` (siempre true en Canvas PAO). Sin NPE/duplicados.
+                    if (targetPeriods != null && !targetPeriods.isEmpty()) {
                         String coursePeriod = c.path("period").asText("");
                         if (coursePeriod.isBlank()) {
                             String sc = c.path("sectionCode").asText("");
@@ -2005,7 +1202,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                                 coursePeriod = sc.substring(0, 4);
                             }
                         }
-                        if (!coursePeriod.isBlank() && !coursePeriod.equals(normalizedPeriod) && !coursePeriod.equals("9999")) {
+                        if (!coursePeriod.isBlank() && !targetPeriods.contains(coursePeriod.trim())) {
                             continue;
                         }
                     }
@@ -2020,7 +1217,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                         }
                     }
                     ModalityType modality = ModalityType.from(c.path("modality").asText(null));
-                    DashboardCourseRef ref = new DashboardCourseRef(sectionId, courseCode, classNumber, sectionCode, name, modality);
+                    DashboardCourseRef ref = new DashboardCourseRef(courseId, sectionId, courseCode, classNumber, sectionCode, name, modality);
                     refs.add(ref);
 
                     // Prevención estricta de NPE en ConcurrentHashMap y aislamiento total multi-alumno
@@ -2031,7 +1228,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                         }
                         // Clave ESTRICTAMENTE acotada por estudiante: CERO clave global para evitar contaminación de mallas
                         if (name != null && !name.isBlank() && !studentCode.isBlank()) {
-                            String norm = normalizeCourseName(name);
+                            String norm = CourseNameNormalizer.normalize(name);
                             courseNameToCourseCodeCache.put(studentCode + ":" + norm, courseCode);
                         }
                     } else {
@@ -2065,7 +1262,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         }
         String studentCode = (token != null) ? extractStudentCodeFromToken(token) : "";
         if (courseName != null && !courseName.isBlank() && !studentCode.isBlank()) {
-            String norm = normalizeCourseName(courseName);
+            String norm = CourseNameNormalizer.normalize(courseName);
             String scopedKey = studentCode + ":" + norm;
             if (courseNameToCourseCodeCache.containsKey(scopedKey)) {
                 return courseNameToCourseCodeCache.get(scopedKey);
@@ -2079,7 +1276,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 return sectionToCourseCodeCache.get(sectionId);
             }
             if (courseName != null && !courseName.isBlank() && !studentCode.isBlank()) {
-                String norm = normalizeCourseName(courseName);
+                String norm = CourseNameNormalizer.normalize(courseName);
                 String scopedKey = studentCode + ":" + norm;
                 if (courseNameToCourseCodeCache.containsKey(scopedKey)) {
                     return courseNameToCourseCodeCache.get(scopedKey);
@@ -2097,18 +1294,6 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         } catch (Exception e) {
             log.warn("[UtpPortalGatewayAdapter] No se pudo cargar dashboard-courses: {}", e.getMessage());
         }
-    }
-
-    private String normalizeCourseName(String name) {
-        if (name == null) return "";
-        return name.toUpperCase()
-                .replaceAll("[ÁÀÄÂ]", "A")
-                .replaceAll("[ÉÈËÊ]", "E")
-                .replaceAll("[ÍÌÏÎ]", "I")
-                .replaceAll("[ÓÒÖÔ]", "O")
-                .replaceAll("[ÚÙÜÛ]", "U")
-                .replaceAll("[^A-Z0-9]", "")
-                .trim();
     }
 
     @Override
@@ -2333,7 +1518,9 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         String userId = extractUserIdFromToken(effectiveToken);
         String tenantId = extractTenantIdFromToken(effectiveToken);
 
-        String effectiveDate = (dateToQuery != null && !dateToQuery.isBlank()) ? dateToQuery : "2026-09-21+00:00:00";
+        String effectiveDate = (dateToQuery != null && !dateToQuery.isBlank())
+                ? dateToQuery
+                : LocalDate.now().toString() + "+00:00:00";
         String effectiveMode = (intervalMode != null && !intervalMode.isBlank()) ? intervalMode : "period";
 
         String url = getPaoEndpoint("/course/student/calendar/activities?userId=" + userId)
@@ -2360,7 +1547,6 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
 
             HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
             if (resp.statusCode() == 200) {
-                rememberResolvedPaoUserId(effectiveToken, userId);
                 JsonNode root = objectMapper.readTree(resp.body());
                 if (root.has("errors")) {
                     throw new UpstreamServiceException("UTP PAO devolvió errores al consultar el calendario de actividades.");
@@ -2380,7 +1566,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
 
                         String secId = meta.path("sectionId").asText(null);
                         String cName = meta.path("courseName").asText(null);
-                        String cCode = resolveCourseCode(secId, cName, effectiveToken);
+                        String cCode = resolveCourseCode(secId, null, effectiveToken);
 
                         activities.add(AcademicActivity.builder()
                                 .id(ev.path("id").asText(null))
@@ -2407,7 +1593,6 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                     throw new UpstreamServiceException("UTP PAO no devolvió un arreglo de eventos para el calendario de actividades.");
                 }
             } else if (resp.statusCode() == 401 || resp.statusCode() == 403) {
-                invalidatePaoUserId(extractStudentCodeFromToken(effectiveToken), userId);
                 log.warn("[UtpPortalGatewayAdapter] Error {} consultando calendar activities: sesión no autorizada o expirada", resp.statusCode());
                 throw new AuthenticationException("Sesión institucional UTP expirada o no autorizada en PAO (HTTP " + resp.statusCode() + ").");
             } else if (resp.statusCode() == 404) {
@@ -2477,7 +1662,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         if (studentCode == null || studentCode.isBlank()) {
             throw new AuthenticationException("Token de autenticación no contiene código de estudiante válido");
         }
-        String effectivePeriod = (periodId != null && !periodId.isBlank()) ? periodId : "2263";
+        String effectivePeriod = (periodId != null && !periodId.isBlank()) ? periodId : resolveCurrentAcademicPeriod(effectiveToken).id();
 
         String url = getPortalEndpoint();
         log.info("[UtpPortalGatewayAdapter] Consultando GetCourseSummary en Portal GraphQL para periodo: {}", effectivePeriod);
@@ -2503,6 +1688,9 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 "      catalogNumber\n" +
                 "      section\n" +
                 "      credits\n" +
+                "      weeklyHours\n" +
+                "      approvalStatus\n" +
+                "      professors\n" +
                 "      formula\n" +
                 "      teacher\n" +
                 "      average\n" +
@@ -2569,10 +1757,18 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                         if (cNode.has("evaluations") && cNode.path("evaluations").isArray()) {
                             for (JsonNode ev : cNode.path("evaluations")) {
                                 String val = ev.path("value").asText("");
+                                String trimmedVal = val != null ? val.trim() : "";
+                                // "0.02" es el centinela institucional de nota pendiente.
+                                // 0.0 y 1.0 son notas reales y deben computarse.
                                 boolean isGraded = false;
-                                try {
-                                    isGraded = Double.parseDouble(val) > 1.0;
-                                } catch (Exception ignored) {}
+                                if (!trimmedVal.isEmpty() && !"0.02".equals(trimmedVal)) {
+                                    try {
+                                        Double.parseDouble(trimmedVal);
+                                        isGraded = true;
+                                    } catch (NumberFormatException ignored) {
+                                        // Valor no numérico: pendiente.
+                                    }
+                                }
 
                                 evGrades.add(CourseSummaryData.EvaluationGrade.builder()
                                         .name(ev.path("name").asText(""))
@@ -2592,6 +1788,8 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                                 .formula(cNode.path("formula").asText(""))
                                 .teacher(cNode.path("teacher").asText(""))
                                 .average(cNode.path("average").asText(""))
+                                .approvalStatus(cNode.path("approvalStatus").asText(null))
+                                .professors(cNode.path("professors").asText(null))
                                 .evaluations(evGrades)
                                 .build());
                 }

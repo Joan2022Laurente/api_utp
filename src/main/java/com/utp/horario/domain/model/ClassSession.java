@@ -24,6 +24,8 @@ public class ClassSession {
     private ModalityType modalityType;
     private String classroom;
     private String building;
+    /** Identificador institucional crudo del edificio (ej. SL04_PACIF), nunca inferido. */
+    private String buildingId;
     private String teacher;
     private String modality; // P (Presencial), R (Remoto), V (Virtual)
     private LocalDateTime startAt;

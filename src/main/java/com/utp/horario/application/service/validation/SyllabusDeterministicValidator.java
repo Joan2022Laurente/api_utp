@@ -70,10 +70,10 @@ public class SyllabusDeterministicValidator {
         validateAntiHallucination(syllabus, errors);
 
         if (!errors.isEmpty()) {
-            log.warn("[SyllabusValidator] ❌ Validación determinista fallida para {}: {}", 
+            log.warn("[SyllabusValidator] Validación determinista fallida para {}: {}", 
                     syllabus.getCourseCode(), errors);
         } else {
-            log.info("[SyllabusValidator] ✅ Sílabo validado exitosamente para {} ({} evaluaciones, {} semanas)", 
+            log.info("[SyllabusValidator] Sílabo validado exitosamente para {} ({} evaluaciones, {} semanas)", 
                     syllabus.getCourseCode(), 
                     syllabus.getEvaluations() != null ? syllabus.getEvaluations().size() : 0,
                     syllabus.getWeeklySchedule() != null ? syllabus.getWeeklySchedule().size() : 0);

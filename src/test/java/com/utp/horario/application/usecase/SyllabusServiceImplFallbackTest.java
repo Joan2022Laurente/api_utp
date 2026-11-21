@@ -213,19 +213,32 @@ class SyllabusServiceImplFallbackTest {
     void officialFallbackDoesNotInventWeeks() {
         when(fleet.parseSyllabusWithAi(anyString(), anyString())).thenReturn(Optional.empty());
 
-        Syllabus shortSchedule = Syllabus.builder()
-                .id(COURSE).courseCode(COURSE).courseName("CURSO CORTO")
-                .formula("(50%)PC1 + (50%)PROY")
-                .evaluations(List.of(
-                        SyllabusEvaluation.builder().id("PC1").type("PC1").description("Practica 1")
-                                .week(2).weightPercent(50).build(),
-                        SyllabusEvaluation.builder().id("PROY").type("PROY").description("Proyecto")
-                                .week(3).weightPercent(50).build()))
-                .weeklySchedule(List.of(
-                        SyllabusWeeklySession.builder().week(1).unit("U1").topic("Tema 1").build(),
-                        SyllabusWeeklySession.builder().week(2).unit("U1").topic("Tema 2").build()))
-                .build();
-        when(parserEngine.parse(anyString(), anyString())).thenReturn(shortSchedule);
+        String shortPdfText = """
+                SÍLABO
+                CURSO CORTO (100000SI82)
+                1. INFORMACIÓN GENERAL
+                1.2. Créditos: 3
+                1.3. Enseñanza de curso: Presencial
+                1.4. Horas semanales: 4
+                4. LOGRO GENERAL DE APRENDIZAJE
+                Logro general de aprendizaje del curso corto para validación académica.
+                7. SISTEMA DE EVALUACIÓN
+                El cálculo del promedio final considera la siguiente fórmula:
+                (50%)PC1 + (50%)PROY
+                Donde:
+                Tipo Descripción Semana Observación
+                PC1 Práctica 1 2 Individual
+                PROY Proyecto 3 Grupal
+                8. CRONOGRAMA DE ACTIVIDADES
+                Semana 1
+                Temario: Tema introductorio
+                Semana 2
+                Temario: Tema avanzado y evaluación PC1
+                """;
+
+        when(gateway.fetchSyllabusPdfText(anyString(), anyString())).thenReturn(shortPdfText);
+        when(parserEngine.parse(anyString(), anyString())).thenAnswer(inv ->
+                new SyllabusParserEngine().parse(inv.getArgument(0), inv.getArgument(1)));
 
         CourseSummaryData summary = CourseSummaryData.builder()
                 .periodId("2263")

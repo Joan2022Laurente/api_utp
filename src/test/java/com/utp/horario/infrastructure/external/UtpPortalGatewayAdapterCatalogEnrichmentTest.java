@@ -46,7 +46,7 @@ class UtpPortalGatewayAdapterCatalogEnrichmentTest {
                "class":{"id":"gql-async","start":1790033400000,"end":1790038800000,
                  "descAmb":"AULA VIRTUAL","professors":{"firstName":"DOCENTE","lastName":"ASINCRONO"},
                  "location":{"classRoom":{"id":"AV55","floor":"V0"},"building":{"id":"B1","desc":"Pabellon"}},
-                 "instructionMode":"P","linkZoom":null,
+                 "instructionMode":"VT","classType":"3","linkZoom":null,
                  "linkCourseClass":"https://class.utp.edu.pe/student/courses/24577268-593a-5db7-a592-d676a656f171/section/83a80520-fc23-54ca-aa94-471582761354/learnv2"}},
               {"name":"GESTIÓN DEL SERVICIO TI","period":"2263",
                "class":{"id":"gql-live","start":1790033400000,"end":1790038400000,
@@ -195,7 +195,7 @@ class UtpPortalGatewayAdapterCatalogEnrichmentTest {
         ClassSession session = interval.getClasses().get(0);
         // Para la estudiante B (malla ciclo 8), "GESTIÓN DEL SERVICIO TI" es 100000S72T, NO 100000S74T de Joan
         assertEquals("100000S72T", session.getCourseCode());
-        assertEquals("COMPLETE", interval.getEnrichmentStatus());
+        assertEquals("PARTIAL", interval.getEnrichmentStatus(), "El edificio UTP_71 del fixture no resuelve contra getBuildings: enrichmentStatus debe ser PARTIAL");
 
         // Verificar resolución de taller THP desde la pasarela sin colisiones
         String workshopCode = adapter.resolveCourseCode("65d46c7a-fddc-5449-87d7-3102c748e034", "Crea Apps Web como un Pro: Domina Node.js y Angular / THP", tokenStudentB);

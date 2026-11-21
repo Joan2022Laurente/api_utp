@@ -26,8 +26,8 @@ public class CourseSummaryController {
     @Operation(summary = "Obtener resumen oficial de cursos, notas parciales y fórmulas rectoras", description = "Consulta la operación GraphQL GetCourseSummary del Portal UTP con encabezados corporativos para obtener las calificaciones de cada evaluación y la fórmula oficial del ciclo.")
     @GetMapping("/summary")
     public ResponseEntity<ApiResponse<CourseSummaryData>> getCourseSummary(
-            @Parameter(description = "ID del periodo académico en Portal UTP (ej. 2263 para 2026-2)", example = "2263")
-            @RequestParam(required = false, defaultValue = "2263") String periodId,
+            @Parameter(description = "ID del periodo académico en Portal UTP (ej. 2263 para 2026-2). Si se omite, se usa el periodo activo configurado.", example = "2263")
+            @RequestParam(required = false) String periodId,
             @Parameter(description = "Token Bearer SSO de UTP")
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
 
@@ -35,7 +35,7 @@ public class CourseSummaryController {
         if (token == null) {
             return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP con formato 'Bearer <token>'"));
         }
-        CourseSummaryData summary = academicTaskServicePort.getCourseSummary(periodId, token);
+        CourseSummaryData summary = academicTaskServicePort.getCourseSummary(periodId != null ? periodId : "", token);
         return ResponseEntity.ok(ApiResponse.ok("Resumen oficial de cursos y calificaciones obtenido", summary));
     }
 
@@ -46,8 +46,8 @@ public class CourseSummaryController {
             @org.springframework.web.bind.annotation.PathVariable String courseCode,
             @Parameter(description = "Nota objetivo que se desea alcanzar (por defecto 12.0)", example = "12.0")
             @RequestParam(required = false, defaultValue = "12.0") double targetGrade,
-            @Parameter(description = "ID del periodo académico en Portal UTP (ej. 2263 para 2026-2)", example = "2263")
-            @RequestParam(required = false, defaultValue = "2263") String periodId,
+            @Parameter(description = "ID del periodo académico en Portal UTP (ej. 2263 para 2026-2). Si se omite, se usa el periodo activo configurado.", example = "2263")
+            @RequestParam(required = false) String periodId,
             @Parameter(description = "Token Bearer SSO de UTP")
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
 
@@ -55,7 +55,7 @@ public class CourseSummaryController {
         if (token == null) {
             return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP con formato 'Bearer <token>'"));
         }
-        com.utp.horario.domain.model.GradeSimulationResult result = academicTaskServicePort.simulateCourseGrade(courseCode, targetGrade, periodId, token);
+        com.utp.horario.domain.model.GradeSimulationResult result = academicTaskServicePort.simulateCourseGrade(courseCode, targetGrade, periodId != null ? periodId : "", token);
         return ResponseEntity.ok(ApiResponse.ok("Simulación de calificación calculada exitosamente", result));
     }
 
@@ -64,8 +64,8 @@ public class CourseSummaryController {
     public ResponseEntity<ApiResponse<java.util.List<com.utp.horario.domain.model.GradeSimulationResult>>> simulateAllCourses(
             @Parameter(description = "Nota objetivo común (por defecto 12.0)", example = "12.0")
             @RequestParam(required = false, defaultValue = "12.0") double targetGrade,
-            @Parameter(description = "ID del periodo académico en Portal UTP (ej. 2263 para 2026-2)", example = "2263")
-            @RequestParam(required = false, defaultValue = "2263") String periodId,
+            @Parameter(description = "ID del periodo académico en Portal UTP (ej. 2263 para 2026-2). Si se omite, se usa el periodo activo configurado.", example = "2263")
+            @RequestParam(required = false) String periodId,
             @Parameter(description = "Token Bearer SSO de UTP")
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
 
@@ -73,7 +73,7 @@ public class CourseSummaryController {
         if (token == null) {
             return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP con formato 'Bearer <token>'"));
         }
-        java.util.List<com.utp.horario.domain.model.GradeSimulationResult> results = academicTaskServicePort.simulateAllCourses(targetGrade, periodId, token);
+        java.util.List<com.utp.horario.domain.model.GradeSimulationResult> results = academicTaskServicePort.simulateAllCourses(targetGrade, periodId != null ? periodId : "", token);
         return ResponseEntity.ok(ApiResponse.ok("Simulación de todos los cursos calculada exitosamente", results));
     }
 }

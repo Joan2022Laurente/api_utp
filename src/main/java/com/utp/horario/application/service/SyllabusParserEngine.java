@@ -94,34 +94,36 @@ public class SyllabusParserEngine {
             }
         }
 
-        // 2. Extraer Periodo / Ciclo
-        String semester = "2026 - Ciclo 2 Agosto";
+        // 2. Extraer Periodo / Ciclo (solo si el documento lo declara)
+        String semester = null;
         Pattern cyclePattern = Pattern.compile("(\\d{4}\\s*-\\s*Ciclo\\s*\\d+\\s*[A-Za-z]+)", Pattern.CASE_INSENSITIVE);
         Matcher cycleMatcher = cyclePattern.matcher(cleanText);
         if (cycleMatcher.find()) {
             semester = cycleMatcher.group(1).trim();
         }
 
-        // 3. Extraer Datos Generales (Créditos, Modalidad, Horas, Carreras)
-        int credits = 3;
+        // 3. Extraer Datos Generales (Créditos, Modalidad, Horas, Carreras).
+        // Regla de honestidad: si el PDF no declara el dato, el campo queda null.
+        // Nunca se rellena con valores académicos por defecto.
+        Integer credits = null;
         Pattern creditsPattern = Pattern.compile("Créditos:\\s*(\\d+)", Pattern.CASE_INSENSITIVE);
         Matcher creditsMatcher = creditsPattern.matcher(cleanText);
         if (creditsMatcher.find()) {
-            credits = parseIntSafe(creditsMatcher.group(1), 3);
+            credits = parseIntStrict(creditsMatcher.group(1), "créditos");
         }
 
-        String modality = "Presencial";
+        String modality = null;
         Pattern modalityPattern = Pattern.compile("Enseñanza de curso:\\s*([^\\n\\r]+)", Pattern.CASE_INSENSITIVE);
         Matcher modalityMatcher = modalityPattern.matcher(cleanText);
         if (modalityMatcher.find()) {
             modality = modalityMatcher.group(1).trim();
         }
 
-        int weeklyHours = 4;
+        Integer weeklyHours = null;
         Pattern hoursPattern = Pattern.compile("Horas semanales:\\s*(\\d+)", Pattern.CASE_INSENSITIVE);
         Matcher hoursMatcher = hoursPattern.matcher(cleanText);
         if (hoursMatcher.find()) {
-            weeklyHours = parseIntSafe(hoursMatcher.group(1), 4);
+            weeklyHours = parseIntStrict(hoursMatcher.group(1), "horas semanales");
         }
 
         List<String> careers = new ArrayList<>();
@@ -147,7 +149,7 @@ public class SyllabusParserEngine {
         SyllabusFormulaParser.FormulaParseResult formulaResult = SyllabusFormulaParser.parse(cleanText);
         String formula = !formulaResult.formulaString().isBlank() 
                 ? formulaResult.formulaString() 
-                : "(25%)PC1 + (25%)PC2 + (10%)PA + (40%)PROY";
+                : "";
 
         // 6. Extraer Evaluaciones y Rúbricas (Reconstructor Tabular Multilínea)
         List<SyllabusEvaluation> evaluations = SyllabusTableReconstructor.reconstructEvaluations(
@@ -180,23 +182,24 @@ public class SyllabusParserEngine {
                 .formula(formula)
                 .evaluations(evaluations)
                 .rules(rules)
-                .maxSimilarityPercent(20)
-                .aiPolicy("Prohibido el uso de IA generativa para redacción o copia no documentada.")
                 .weeklySchedule(weeklySchedule)
                 .build();
     }
 
     /**
-     * Conversión defensiva a entero: un valor numérico fuera del rango de {@code int}
-     * (por ejemplo un número de créditos malformado en el PDF) no debe abortar el parseo
-     * completo del sílabo con una {@link NumberFormatException}.
+     * Conversión estricta a entero para valores que el PDF sí declara.
+     *
+     * <p>Un valor declarado pero ilegible (por ejemplo, un número de créditos fuera del
+     * rango de {@code int}) no se sustituye por un valor inventado: se reporta como
+     * documento oficial no interpretable mediante {@link UpstreamServiceException}.</p>
      */
-    private int parseIntSafe(String rawValue, int fallback) {
+    private int parseIntStrict(String rawValue, String fieldName) {
         try {
             return Integer.parseInt(rawValue.trim());
         } catch (Exception e) {
-            log.warn("[SyllabusParserEngine] Valor numérico no interpretable ('{}'), se usa el valor por defecto {}", rawValue, fallback);
-            return fallback;
+            throw new UpstreamServiceException(
+                    "El documento oficial declara un valor no interpretable para " + fieldName
+                            + ": '" + rawValue + "'.", e);
         }
     }
 

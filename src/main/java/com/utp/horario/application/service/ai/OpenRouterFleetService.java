@@ -149,7 +149,7 @@ public class OpenRouterFleetService {
             Duration attemptTimeout = Duration.ofMillis(Math.max(500, attemptTimeoutMillis));
 
             try {
-                log.info("[OpenRouterFleet] 🤖 Solicitando extracción IA: Modelo='{}' (Fallbacks: {}) usando Clave #{}/{} ({})",
+                log.info("[OpenRouterFleet] Solicitando extracción IA: Modelo='{}' (Fallbacks: {}) usando Clave #{}/{} ({})",
                         effectiveModel, dynamicModels, (keyIdx + 1), totalKeys, maskedKey);
 
                 Map<String, Object> payload = new LinkedHashMap<>();
@@ -186,13 +186,13 @@ public class OpenRouterFleetService {
                         Optional<Syllabus> parsed = parseAiResponseToDomain(content, courseCode);
                         if (parsed.isPresent()) {
                             String usedModel = resJson.path("model").asText(effectiveModel);
-                            log.info("[OpenRouterFleet] ✨ Sílabo exitosamente extraído con IA (Modelo activo: {}, Clave #{}) para curso: {}", 
+                            log.info("[OpenRouterFleet] Sílabo exitosamente extraído con IA (Modelo activo: {}, Clave #{}) para curso: {}", 
                                     usedModel, (keyIdx + 1), courseCode);
                             return parsed;
                         }
                     }
                 } else if (response.statusCode() == 429 || response.statusCode() == 402 || response.statusCode() == 403) {
-                    log.warn("[OpenRouterFleet] ⚠️ Límite de cuota o rate-limit (HTTP {}) en Clave #{}. Rotando a siguiente cuenta...", 
+                    log.warn("[OpenRouterFleet] Límite de cuota o rate-limit (HTTP {}) en Clave #{}. Rotando a siguiente cuenta...", 
                             response.statusCode(), (keyIdx + 1));
                     currentKeyIndex.incrementAndGet();
                 } else {

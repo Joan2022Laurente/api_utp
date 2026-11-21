@@ -39,19 +39,11 @@ public class GradeSimulatorEngine {
             }
         }
 
-        // Si la fórmula no pudo extraerse, distribuir 100% equitativamente entre las evaluaciones conocidas
-        if (terms.isEmpty() && !evaluations.isEmpty()) {
-            int count = evaluations.size();
-            int baseWeight = 100 / count;
-            int remainder = 100 % count;
-            for (int i = 0; i < count; i++) {
-                EvaluationGrade eg = evaluations.get(i);
-                int w = baseWeight + (i == count - 1 ? remainder : 0);
-                String label = (eg.getShortName() != null && !eg.getShortName().isBlank()) 
-                        ? eg.getShortName().trim().toUpperCase() 
-                        : ("EVAL" + (i + 1));
-                terms.add(new AssessmentWeight(label, w));
-            }
+        // Sin fórmula oficial no hay simulación posible: no se inventan ponderaciones.
+        if (terms.isEmpty()) {
+            throw new IllegalStateException(
+                    "Fórmula oficial no disponible para simulación del curso '"
+                            + course.getCourseCode() + "'.");
         }
 
         double accumulatedScore = 0.0;
@@ -70,17 +62,20 @@ public class GradeSimulatorEngine {
             String displayName = (matched != null && matched.getName() != null) ? matched.getName() : label;
 
             if (matched != null && Boolean.TRUE.equals(matched.getIsGraded())) {
-                try {
-                    double parsed = Double.parseDouble(matched.getValue().trim());
-                    if (parsed > 1.0) {
+                String rawValue = matched.getValue() != null ? matched.getValue().trim() : "";
+                // "0.02" es el centinela institucional de nota aún no ingresada.
+                // Cualquier otro valor numérico real (incluidos 0.0 y 1.0) se computa.
+                if (!rawValue.isEmpty() && !"0.02".equals(rawValue)) {
+                    try {
+                        double parsed = Double.parseDouble(rawValue);
                         currentGrade = parsed;
                         isGraded = true;
                         pointsContributed = round((weight / 100.0) * currentGrade);
                         accumulatedScore += pointsContributed;
                         gradedWeight += weight;
+                    } catch (NumberFormatException ignored) {
+                        // Valor no numérico: se considera pendiente, nunca una nota inventada.
                     }
-                } catch (Exception ignored) {
-                    // Valor no numérico
                 }
             }
 

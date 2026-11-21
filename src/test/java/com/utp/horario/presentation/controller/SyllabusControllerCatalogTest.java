@@ -28,7 +28,7 @@ import static org.mockito.Mockito.when;
  * catalogo completo se sigue devolviendo tal cual. El filtrado por alumno es una via
  * optativa ({@code scope=student}) que exige Bearer token de sesion valida.</p>
  */
-class SyllabusCatalogControllerTest {
+class SyllabusControllerCatalogTest {
 
     private MockMvc mockMvc;
     private SyllabusServicePort syllabusServicePort;

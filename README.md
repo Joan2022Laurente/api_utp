@@ -1,4 +1,4 @@
-﻿# UTP Academic Gateway API (Multi-Tenant & Production-Grade)
+# UTP Academic Gateway API (Multi-Tenant & Production-Grade)
 
 > **High-throughput, stateless Academic Gateway for UTP (Universidad TecnolÃ³gica del PerÃº).**  
 > DiseÃ±ada para que servicios backend, bots acadÃ©micos y plataformas educativas gestionen de forma segura, aislada y concurrente el acceso a notas, horarios, actividades y fÃ³rmulas oficiales de miles de estudiantes.
@@ -168,9 +168,9 @@ Consulta el calendario de actividades de Canvas / UTP+ Class con enriquecimiento
 Retorna las evaluaciones calificadas mÃ¡s urgentes ordenadas cronolÃ³gicamente.
 - **Query Params:** `limit` (default: 5).
 
-#### `GET /tasks/specification`
+#### `GET /tasks/{sectionId}/{activityId}`
 Extrae la consigna en Markdown, tipo de entrega (subida de archivos o URL), intentos mÃ¡ximos y rÃºbrica detallada con puntajes por criterio.
-- **Query Params:** `sectionId`, `activityId`.
+- **Path Params:** `sectionId`, `activityId`.
 
 ---
 
@@ -245,9 +245,6 @@ Simulador matemÃ¡tico y proyector de notas rectoras.
 ---
 
 ### SÃ­labos y Cronograma Semanal (`/syllabus`)
-
-#### `POST /syllabus/sync`
-Sincroniza y parsea automÃ¡ticamente el sÃ­labo en PDF del curso mediante el motor determinista de expresiones regulares y mÃ¡quinas de estado.
 
 #### `GET /syllabus/{courseCode}`
 Retorna las competencias, fÃ³rmula oficial, unidades de aprendizaje y cronograma detallado de las 18 semanas de clases en JSON (`ApiResponse<Syllabus>`).
@@ -329,7 +326,6 @@ El servicio estarÃ¡ disponible en `http://localhost:8080/api/v1`.
 | `SUPABASE_URL` | Recomendada | URL del proyecto Supabase donde se cachean los silabos (`official_syllabi`). Sin ella el Cache-Aside degrada a la base local. |
 | `SUPABASE_SERVICE_ROLE_KEY` | Recomendada | Service role key de Supabase. Sin ella se **omite** la llamada remota (se evita un 401 por timeout en cada cache-miss). |
 | `OPENROUTER_KEYS` | Recomendada | Lista de claves OpenRouter separadas por comas para la flota de modelos `:free`. Sin ellas el pipeline cae al motor determinista regex. |
-| `UTP_PAO_USER_MAP` | **Critica** | Correspondencia PAO por alumno: `u23307609=uuid,u21200000=uuid`. El portal UTP+ Class exige la cabecera `user-id` con el **`paoUserId`**, que **no viaja en el JWT de Keycloak** (solo el `sub` de la cuenta SSO). Sin esta correspondencia, `/syllabus/*` y `/tasks/activities` reciben **HTTP 403** del PAO y el alumno obtiene un silabo vacio / cero actividades. Configurable tambien como `utp.pao-user-map` en `application.yml`. |
 | `JWT_SECRET` | Opcional | Secreto de firma JWT. **Nunca** debe versionarse con un valor literal. |
 | `PORT` | Opcional | Puerto HTTP (por defecto `8080`). |
 
@@ -363,28 +359,15 @@ uuidv5("6ba7b810-9dad-11d1-80b4-00c04fd430c8", "U23307609@UTP.EDU.PE")
   = 4e535263-79a0-5890-ae33-72a7aa0629ab
 ```
 
-#### Cascada de resolucion
+#### Resolución única, sin cascada
 
-| Paso | Origen | Coste | Automatico |
-|---|---|---|---|
-| 1 | **Derivacion determinista** `uuidv5(namespace, email)` | local, sin red | **si, siempre** |
-| 2 | Claim del token (`paoUserId`, `userId`, `classUserId`) | local | si la plataforma lo expone |
-| 3 | Registro en cache del alumno | local | cacheado por alumno |
-| 4 | Auto-descubrimiento validado (identificadores del Portal GraphQL, cada uno verificado contra PAO) | 1 sonda HTTP | si el id es derivable |
-| 5 | Configuracion externa (`utp.pao-user-map` / `UTP_PAO_USER_MAP`) | local | manual (respaldo) |
-| 6 | Fallback al claim `sub` de Keycloak | local | puede ser rechazado por PAO |
+El paoUserId se deriva **siempre** por UUIDv5 en 0 ms. No hay claims alternativos,
+auto-descubrimiento, cachés en memoria ni ficheros en disco (el filesystem de Heroku es efímero).
 
-- **Aislamiento multi-tenant:** el mapeo `studentCode -> paoUserId` vive en un
-  `ConcurrentHashMap` indexado por el codigo de alumno en minusculas. Nunca hay una clave
-  compartida ni se presta la identidad de otro alumno.
-- **Persistencia:** el mapeo resuelto se guarda en `.pao-user-map.cache.json` (no
-  versionado), configurable con `UTP_PAO_USER_CACHE_FILE` para apuntar a un volumen
-  persistente.
-- **Degradacion elegante:** un `403` de PAO se registra con un `WARN` explicativo y el
-  endpoint continua con la cache de base de datos / Supabase, sin lanzar `500`.
-- **Acoplamiento:** si UTP cambiase el namespace, la derivacion dejaria de ser valida. Por
-  eso el namespace es configurable con `UTP_PAO_UUID_NAMESPACE` y la derivacion es solo el
-  primer paso de la cascada: si falla, se prueban los siguientes.
+- **Aislamiento multi-tenant:** la semilla es el correo institucional del propio alumno;
+  ninguna petición presta la identidad de otro estudiante.
+- **Acoplamiento:** si UTP cambiase el namespace, la derivación dejaría de ser válida. Por
+  eso el namespace es configurable con UTP_PAO_UUID_NAMESPACE (Checkpoint §19).
 
 ### Migracion opcional de la tabla `official_syllabi` (fidelidad 1:1)
 

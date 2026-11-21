@@ -36,7 +36,11 @@ public class SyllabusScheduleFsm {
                 continue;
             }
 
-            if (lineText.toUpperCase().matches(".*(?:11\\.|9\\.|BIBLIOGRAFÍA|FUENTES DE INFORMACIÓN|PLAN DE APRENDIZAJE).*")) {
+            // Fin del cronograma: solo encabezados de sección reales, nunca una frase
+            // temática que contenga "fuentes de información" o un número con punto.
+            String upperLine = lineText.toUpperCase();
+            if (upperLine.matches("^\\s*\\d{1,2}\\.\\s*(?:BIBLIOGRAF[IÍ]A|FUENTES DE INFORMACI[OÓ]N|REFERENCIAS|ANEXOS|PLAN DE APRENDIZAJE).*")
+                    || upperLine.matches("^\\s*(?:BIBLIOGRAF[IÍ]A|FUENTES DE INFORMACI[OÓ]N|REFERENCIAS|ANEXOS|PLAN DE APRENDIZAJE)\\s*$")) {
                 break;
             }
 
@@ -131,7 +135,7 @@ public class SyllabusScheduleFsm {
             }
         }
 
-        // 3. Consolidar sesiones en semanas reales sin asumir 18 arbitrariamente
+        // 3. Consolidar sesiones en semanas reales sin asumir un total fijo
         Map<Integer, String> extractedTopics = new HashMap<>();
         int maxSession = sessionMap.keySet().stream().max(Integer::compareTo).orElse(0);
         int maxEvalWeek = (evaluations != null) ? evaluations.stream()
@@ -140,10 +144,9 @@ public class SyllabusScheduleFsm {
                 .max(Integer::compareTo)
                 .orElse(0) : 0;
 
-        int estimatedWeeks = maxEvalWeek >= 4 ? maxEvalWeek : (maxSession > 18 ? 18 : (maxSession > 8 ? (maxSession + 1) / 2 : maxSession));
-        if (estimatedWeeks < 4) {
-            estimatedWeeks = maxSession > 0 ? maxSession : 18;
-        }
+        int estimatedWeeks = maxEvalWeek >= 4
+                ? maxEvalWeek
+                : (maxSession > 8 ? (maxSession + 1) / 2 : maxSession);
 
         boolean isMultiSession = maxSession > estimatedWeeks;
 
@@ -170,40 +173,33 @@ public class SyllabusScheduleFsm {
     }
 
     private static List<SyllabusWeeklySession> assembleScheduleList(Map<Integer, String> extractedTopics, List<SyllabusEvaluation> evaluations) {
-        int maxTopicWeek = extractedTopics.keySet().stream().max(Integer::compareTo).orElse(0);
-        int maxEvalWeek = (evaluations != null) ? evaluations.stream()
-                .map(SyllabusEvaluation::getWeek)
-                .filter(Objects::nonNull)
-                .max(Integer::compareTo)
-                .orElse(0) : 0;
-        int totalWeeks = Math.max(maxTopicWeek, maxEvalWeek);
-        if (totalWeeks < 4) {
-            totalWeeks = 18; // Default prudente solo si no se detectaron semanas explícitas
+        List<SyllabusWeeklySession> weeklySchedule = new ArrayList<>();
+        if (extractedTopics == null || extractedTopics.isEmpty()) {
+            return weeklySchedule;
         }
 
-        List<SyllabusWeeklySession> weeklySchedule = new ArrayList<>();
-        double weeksPerUnit = totalWeeks > 0 ? (totalWeeks / 4.0) : 4.5;
-
-        for (int w = 1; w <= totalWeeks; w++) {
-            String topic = extractedTopics.getOrDefault(w, "Sesión de aprendizaje y desarrollo curricular de la Semana " + w);
+        // Solo se emiten las semanas que el documento declara con un tema real.
+        // No se rellenan huecos, no se inventan unidades ni actividades.
+        for (Map.Entry<Integer, String> entry : new TreeMap<>(extractedTopics).entrySet()) {
+            Integer week = entry.getKey();
+            String topic = entry.getValue();
+            if (week == null || topic == null || topic.isBlank()) {
+                continue;
+            }
 
             String evaluationTag = null;
             if (evaluations != null) {
                 for (SyllabusEvaluation ev : evaluations) {
-                    if (ev.getWeek() != null && ev.getWeek() == w) {
+                    if (ev.getWeek() != null && ev.getWeek().equals(week)) {
                         evaluationTag = ev.getType();
                         break;
                     }
                 }
             }
 
-            int unitNumber = Math.min(4, Math.max(1, (int) Math.ceil((double) w / weeksPerUnit)));
             weeklySchedule.add(SyllabusWeeklySession.builder()
-                    .week(w)
-                    .session(w)
-                    .unit("Unidad " + unitNumber)
+                    .week(week)
                     .topic(topic)
-                    .activities("Desarrollo de competencias formativas, ejercicios prácticos y retroalimentación.")
                     .evaluation(evaluationTag)
                     .build());
         }
@@ -306,10 +302,9 @@ public class SyllabusScheduleFsm {
                             .max(Integer::compareTo)
                             .orElse(0) : 0;
 
-                    int estimatedWeeks = maxEvalWeek >= 4 ? maxEvalWeek : (maxSession > 18 ? 18 : (maxSession > 8 ? (maxSession + 1) / 2 : maxSession));
-                    if (estimatedWeeks < 4) {
-                        estimatedWeeks = maxSession > 0 ? maxSession : 18;
-                    }
+                    int estimatedWeeks = maxEvalWeek >= 4
+                            ? maxEvalWeek
+                            : (maxSession > 8 ? (maxSession + 1) / 2 : maxSession);
 
                     boolean isMultiSession = maxSession > estimatedWeeks;
 

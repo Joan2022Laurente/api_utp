@@ -22,10 +22,9 @@ import java.security.NoSuchAlgorithmException;
  * este gateway replica para no depender de un mapa de configuracion por alumno.</p>
  *
  * <p><b>Nota de acoplamiento:</b> si UTP cambiase el namespace, esta derivacion dejaria de
- * ser valida. Por eso el namespace es configurable
- * ({@code UTP_PAO_UUID_NAMESPACE}) y la derivacion es solo la <b>primera</b> de las vias de
- * la cascasa de resolucion: si falla, se prueban las siguientes
- * (claim del token, cache, auto-descubrimiento validado contra PAO, configuracion externa).</p>
+ * ser valida. Por eso el namespace es configurable ({@code UTP_PAO_UUID_NAMESPACE}).
+ * No existe cascada de respaldo: la derivación es la única vía de identidad (Checkpoint §19),
+ * en 0 ms, sin sondas HTTP ni cachés en memoria o disco.</p>
  */
 final class PaoUserIdDeriver {
 
@@ -35,13 +34,6 @@ final class PaoUserIdDeriver {
      * {@code utp.pao-uuid-namespace}.
      */
     static final String DEFAULT_NAMESPACE = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
-
-    /**
-     * Namespace alternativo canonico de la misma libreria {@code uuid} de npm
-     * ({@code uuid.URL}). Se usa como candidato de respaldo si la plataforma
-     * cambiase del namespace DNS al URL: ambos estan publicados en el bundle.
-     */
-    static final String ALTERNATE_NAMESPACE = "6ba7b811-9dad-11d1-80b4-00c04fd430c8";
 
     private static final char[] HEX = "0123456789abcdef".toCharArray();
 
@@ -109,23 +101,6 @@ final class PaoUserIdDeriver {
         } catch (NoSuchAlgorithmException | IllegalArgumentException e) {
             return "";
         }
-    }
-
-    /**
-     * Candidatos de derivacion para un alumno: el namespace configurado y, como respaldo,
-     * el namespace alternativo canonico de la misma libreria.
-     */
-    static java.util.List<String> deriveCandidates(String email) {
-        java.util.List<String> candidates = new java.util.ArrayList<>(2);
-        String primary = derive(email, namespace());
-        if (!primary.isBlank()) {
-            candidates.add(primary);
-        }
-        String alternate = derive(email, ALTERNATE_NAMESPACE);
-        if (!alternate.isBlank() && !candidates.contains(alternate)) {
-            candidates.add(alternate);
-        }
-        return candidates;
     }
 
     private static byte[] uuidToBytes(String uuid) {

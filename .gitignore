@@ -20,7 +20,8 @@ laboratorio/
 *.har
 .env
 .env.*
-*.dump
+__pycache__/
+*.pyc
 
 ### Cache local de resolucion paoUserId (se regenera sola) ###
 .pao-user-map.cache.json

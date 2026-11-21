@@ -8,31 +8,20 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.ResponseBody;
+import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 import java.util.Map;
 
 @Tag(name = "Salud y Diagnóstico", description = "Endpoints de estado de la aplicación y diagnóstico en tiempo real de dependencias externas")
-@Controller
+@RestController
 @RequiredArgsConstructor
 public class RootController {
 
     private final UpstreamHealthService upstreamHealthService;
 
-    @GetMapping(value = "/", produces = MediaType.TEXT_HTML_VALUE)
-    @ResponseBody
-    public ResponseEntity<org.springframework.core.io.Resource> indexHtml() {
-        org.springframework.core.io.Resource resource = new org.springframework.core.io.ClassPathResource("static/index.html");
-        return ResponseEntity.ok()
-                .contentType(MediaType.TEXT_HTML)
-                .body(resource);
-    }
-
-    @GetMapping(value = "/", produces = {MediaType.APPLICATION_JSON_VALUE, MediaType.ALL_VALUE})
-    @ResponseBody
+    @GetMapping(value = "/", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<Map<String, Object>> root() {
         return ResponseEntity.ok(Map.of(
                 "status", "UP",
@@ -42,6 +31,7 @@ public class RootController {
                 "architecture", "Hexagonal / Clean Architecture (SOLID)",
                 "documentation", "/api/v1/swagger-ui/index.html",
                 "endpoints", List.of(
+                        "GET  /",
                         "POST /auth/login",
                         "POST /auth/refresh",
                         "GET  /auth/me",
@@ -49,6 +39,7 @@ public class RootController {
                         "GET  /schedule",
                         "POST /schedule/sync",
                         "GET  /schedule/export.ics",
+                        "GET  /sections/{sectionId}/full",
                         "GET  /syllabus",
                         "GET  /syllabus/{courseCode}",
                         "GET  /syllabus/{courseCode}/markdown",
@@ -67,14 +58,12 @@ public class RootController {
 
     @Operation(summary = "Liveness probe básico", description = "Comprueba que la pasarela local de Spring Boot se encuentra viva y en ejecución.")
     @GetMapping("/health")
-    @ResponseBody
     public ResponseEntity<Map<String, String>> health() {
         return ResponseEntity.ok(Map.of("status", "UP"));
     }
 
     @Operation(summary = "Diagnóstico y salud upstream", description = "Sondea concurrentemente en tiempo real la disponibilidad y latencia de Keycloak SSO, JWKS, Portal UTP GraphQL, UTP+ Class PAO, Supabase y OpenRouter AI.")
     @GetMapping("/health/upstream")
-    @ResponseBody
     public ResponseEntity<ApiResponse<UpstreamHealthDto>> upstreamHealth() {
         UpstreamHealthDto healthDto = upstreamHealthService.evaluateUpstreamHealth();
         return ResponseEntity.ok(ApiResponse.ok("Diagnóstico de servicios upstream completado", healthDto));
