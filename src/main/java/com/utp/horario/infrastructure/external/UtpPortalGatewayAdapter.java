@@ -100,17 +100,26 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
 
     public record AcademicPeriodInfo(String id, String code, String name, boolean isCurrent, LocalDate startDate, LocalDate endDate) {
         public int totalWeeks() {
-            if (startDate == null || endDate == null) return 18;
+            if (startDate == null || endDate == null) {
+                throw new IllegalStateException("El periodo académico '" + name + "' no cuenta con fechas de inicio y fin válidas para calcular totalWeeks.");
+            }
             return (int) Math.max(1, java.time.temporal.ChronoUnit.WEEKS.between(startDate, endDate) + 1);
         }
     }
 
     /**
      * Resuelve el periodo académico activo en tiempo real desde la API oficial de PAO.
-     * Fail-Fast: lanza excepcion tipada ante token inválido, 401/403 o red caída.
+     * Fail-Fast: lanza excepción tipada ante token inválido, 401/403 o red caída.
      * PROHIBIDO retornar objetos sintéticos con periodos hardcodeados.
      */
     public AcademicPeriodInfo resolveCurrentAcademicPeriod(String token) {
+        return resolveAcademicPeriod(token, null);
+    }
+
+    /**
+     * Resuelve un periodo académico específico (por id o código) o el activo si targetPeriodId es null/blanco.
+     */
+    public AcademicPeriodInfo resolveAcademicPeriod(String token, String targetPeriodId) {
         String effectiveToken = (token != null && token.startsWith("Bearer ")) ? token.substring(7).trim() : token;
         if (effectiveToken == null || effectiveToken.isBlank()) {
             throw new AuthenticationException("Se requiere token de sesión institucional UTP para resolver el periodo académico.");
@@ -146,11 +155,17 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
             }
             JsonNode array = objectMapper.readTree(resp.body());
             if (array.isArray()) {
+                boolean searchSpecific = (targetPeriodId != null && !targetPeriodId.isBlank());
                 for (JsonNode node : array) {
-                    if (node.path("isCurrent").asBoolean(false)) {
-                        String id = node.path("id").asText();
-                        String code = node.path("code").asText();
+                    String id = node.path("id").asText();
+                    String code = node.path("code").asText();
+                    boolean matches = searchSpecific
+                            ? (id.equals(targetPeriodId) || code.equalsIgnoreCase(targetPeriodId))
+                            : node.path("isCurrent").asBoolean(false);
+
+                    if (matches) {
                         String name = node.path("name").asText();
+                        boolean isCurr = node.path("isCurrent").asBoolean(false);
                         String startStr = node.path("startDate").asText();
                         String endStr = node.path("endDate").asText();
                         LocalDate start = (startStr != null && startStr.length() >= 10)
@@ -161,14 +176,18 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                                 : null;
                         if (start == null) {
                             throw new UpstreamServiceException(
-                                    "El periodo activo de UTP no incluye fecha de inicio (startDate) válida.");
+                                    "El periodo académico '" + name + "' de UTP no incluye fecha de inicio (startDate) válida.");
                         }
                         if (end == null) {
                             throw new UpstreamServiceException(
-                                    "El periodo activo de UTP no incluye fecha de fin (endDate) válida.");
+                                    "El periodo académico '" + name + "' de UTP no incluye fecha de fin (endDate) válida.");
                         }
-                        return new AcademicPeriodInfo(id, code, name, true, start, end);
+                        return new AcademicPeriodInfo(id, code, name, isCurr, start, end);
                     }
+                }
+                if (searchSpecific) {
+                    throw new UpstreamServiceException(
+                            "El periodo académico solicitado '" + targetPeriodId + "' no fue reportado por la institución.");
                 }
                 throw new UpstreamServiceException(
                         "La institución no reporta ningún periodo académico activo (isCurrent=true).");
@@ -254,9 +273,20 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
             if (parts.length >= 2) {
                 byte[] decoded = Base64.getUrlDecoder().decode(parts[1]);
                 JsonNode payload = objectMapper.readTree(decoded);
-                if (payload.hasNonNull("preferred_username")) return payload.path("preferred_username").asText().trim().toUpperCase();
-                if (payload.hasNonNull("username")) return payload.path("username").asText().trim().toUpperCase();
-                if (payload.hasNonNull("sub")) return payload.path("sub").asText().trim().toUpperCase();
+                if (payload.hasNonNull("preferred_username")) {
+                    String val = payload.path("preferred_username").asText().trim().toUpperCase();
+                    if (!val.isBlank()) return val;
+                }
+                if (payload.hasNonNull("username")) {
+                    String val = payload.path("username").asText().trim().toUpperCase();
+                    if (!val.isBlank()) return val;
+                }
+                if (payload.hasNonNull("sub")) {
+                    String sub = payload.path("sub").asText().trim().toUpperCase();
+                    if (sub.matches("^[U]?\\d{8,9}$")) {
+                        return sub;
+                    }
+                }
             }
         } catch (AuthenticationException e) {
             throw e;
@@ -630,8 +660,8 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
 
         ensureBuildingsLoaded(token, studentCode);
 
-        AcademicPeriodInfo periodInfo = resolveCurrentAcademicPeriod(token);
-        String currentPeriod = (period != null && period.matches("^\\d{4}$")) ? period : periodInfo.id();
+        AcademicPeriodInfo periodInfo = resolveAcademicPeriod(token, (period != null && period.matches("^\\d{4}$")) ? period : null);
+        String currentPeriod = periodInfo.id();
         // Ruptura 5 (Checkpoint §13): conjunto compuesto de periodos, sin filtrar por
         // flag `active` (siempre true en Canvas) y preservando talleres 9999.
         Set<String> targetPeriods = new LinkedHashSet<>();
@@ -774,7 +804,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                     dashboardUpstreamFailed, rejected, unresolvedBuildings, lastFailure != null);
         }
 
-        String effectivePeriodName = (period != null && !period.isBlank()) ? period : periodInfo.name();
+        String effectivePeriodName = periodInfo.name();
         return ScheduleInterval.builder()
                 .id("interval-graphql-" + currentWeekCalc)
                 .periodName(effectivePeriodName)
@@ -874,7 +904,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
 
     public String fetchSyllabusPdfText(String token, String courseCodeOrUrl) {
         if (courseCodeOrUrl == null || courseCodeOrUrl.isBlank()) {
-            return "";
+            return null;
         }
 
         // Token efectivo: SOLO el propio de la petición. Nunca se presta el de otro estudiante.

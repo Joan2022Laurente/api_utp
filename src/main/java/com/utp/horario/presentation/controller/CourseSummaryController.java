@@ -26,7 +26,7 @@ public class CourseSummaryController {
     @Operation(summary = "Obtener resumen oficial de cursos, notas parciales y fórmulas rectoras", description = "Consulta la operación GraphQL GetCourseSummary del Portal UTP con encabezados corporativos para obtener las calificaciones de cada evaluación y la fórmula oficial del ciclo.")
     @GetMapping("/summary")
     public ResponseEntity<ApiResponse<CourseSummaryData>> getCourseSummary(
-            @Parameter(description = "ID del periodo académico en Portal UTP (ej. 2263 para 2026-2). Si se omite, se usa el periodo activo configurado.", example = "2263")
+            @Parameter(description = "ID del periodo académico en Portal UTP tal como lo devuelve /academicperiods. Si se omite, se resuelve dinámicamente el periodo activo.")
             @RequestParam(required = false) String periodId,
             @Parameter(description = "Token Bearer SSO de UTP")
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
@@ -46,7 +46,7 @@ public class CourseSummaryController {
             @org.springframework.web.bind.annotation.PathVariable String courseCode,
             @Parameter(description = "Nota objetivo que se desea alcanzar (por defecto 12.0)", example = "12.0")
             @RequestParam(required = false, defaultValue = "12.0") double targetGrade,
-            @Parameter(description = "ID del periodo académico en Portal UTP (ej. 2263 para 2026-2). Si se omite, se usa el periodo activo configurado.", example = "2263")
+            @Parameter(description = "ID del periodo académico en Portal UTP tal como lo devuelve /academicperiods. Si se omite, se resuelve dinámicamente el periodo activo.")
             @RequestParam(required = false) String periodId,
             @Parameter(description = "Token Bearer SSO de UTP")
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
@@ -64,7 +64,7 @@ public class CourseSummaryController {
     public ResponseEntity<ApiResponse<java.util.List<com.utp.horario.domain.model.GradeSimulationResult>>> simulateAllCourses(
             @Parameter(description = "Nota objetivo común (por defecto 12.0)", example = "12.0")
             @RequestParam(required = false, defaultValue = "12.0") double targetGrade,
-            @Parameter(description = "ID del periodo académico en Portal UTP (ej. 2263 para 2026-2). Si se omite, se usa el periodo activo configurado.", example = "2263")
+            @Parameter(description = "ID del periodo académico en Portal UTP tal como lo devuelve /academicperiods. Si se omite, se resuelve dinámicamente el periodo activo.")
             @RequestParam(required = false) String periodId,
             @Parameter(description = "Token Bearer SSO de UTP")
             @RequestHeader(value = "Authorization", required = false) String authHeader) {

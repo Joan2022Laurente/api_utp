@@ -37,7 +37,6 @@ public class SyllabusServiceImpl implements SyllabusServicePort {
     private final SyllabusMarkdownExporter syllabusMarkdownExporter;
     private final SyllabusPdfToMarkdownSanitizer syllabusSanitizer;
     private final SyllabusDeterministicValidator syllabusValidator;
-    private final UtpProperties utpProperties;
 
     @Autowired
     public SyllabusServiceImpl(SyllabusRepositoryPort syllabusRepositoryPort,
@@ -46,8 +45,7 @@ public class SyllabusServiceImpl implements SyllabusServicePort {
                                OpenRouterFleetService openRouterFleetService,
                                SyllabusMarkdownExporter syllabusMarkdownExporter,
                                SyllabusPdfToMarkdownSanitizer syllabusSanitizer,
-                               SyllabusDeterministicValidator syllabusValidator,
-                               UtpProperties utpProperties) {
+                               SyllabusDeterministicValidator syllabusValidator) {
         this.syllabusRepositoryPort = syllabusRepositoryPort;
         this.utpPortalGatewayPort = utpPortalGatewayPort;
         this.syllabusParserEngine = syllabusParserEngine;
@@ -55,18 +53,19 @@ public class SyllabusServiceImpl implements SyllabusServicePort {
         this.syllabusMarkdownExporter = syllabusMarkdownExporter;
         this.syllabusSanitizer = syllabusSanitizer;
         this.syllabusValidator = syllabusValidator;
-        this.utpProperties = utpProperties != null ? utpProperties : new UtpProperties();
     }
 
+    @Deprecated
     public SyllabusServiceImpl(SyllabusRepositoryPort syllabusRepositoryPort,
                                UtpPortalGatewayPort utpPortalGatewayPort,
                                SyllabusParserEngine syllabusParserEngine,
                                OpenRouterFleetService openRouterFleetService,
                                SyllabusMarkdownExporter syllabusMarkdownExporter,
                                SyllabusPdfToMarkdownSanitizer syllabusSanitizer,
-                               SyllabusDeterministicValidator syllabusValidator) {
+                               SyllabusDeterministicValidator syllabusValidator,
+                               UtpProperties utpProperties) {
         this(syllabusRepositoryPort, utpPortalGatewayPort, syllabusParserEngine, openRouterFleetService,
-             syllabusMarkdownExporter, syllabusSanitizer, syllabusValidator, new UtpProperties());
+             syllabusMarkdownExporter, syllabusSanitizer, syllabusValidator);
     }
 
     /**

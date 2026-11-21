@@ -235,6 +235,12 @@ public class SyllabusScheduleFsm {
                         String trimmed = line.trim();
                         if (trimmed.isEmpty()) continue;
 
+                        // Delimitador estricto: si se alcanza la siguiente sección rectora, detener la recolección
+                        // para evitar interpretar bibliografía o anexos numerados como sesiones fantasmas.
+                        if (trimmed.matches("^(?:(?:[VvXxIi]+\\.|\\d+\\.)\\s*)?(?:SISTEMA DE EVALUACI[OÓ]N|FUENTES DE INFORMACI[OÓ]N|BIBLIOGRAF[IÍ]A|FUENTES BIBLIOGR[AÁ]FICAS).*$")) {
+                            break;
+                        }
+
                         // Patrón: "W S Topic..." o "S Topic..." o "W S"
                         Matcher rowMatcher = Pattern.compile("^(?:(\\d{1,2})\\s+)?(\\d{1,2})\\s*(.*)$").matcher(trimmed);
                         if (rowMatcher.find()) {

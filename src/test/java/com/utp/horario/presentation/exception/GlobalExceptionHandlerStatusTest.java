@@ -40,6 +40,11 @@ class GlobalExceptionHandlerStatusTest {
             throw new IllegalArgumentException("Parámetro inválido");
         }
 
+        @GetMapping("/test/grade-simulation")
+        public void gradeSimulation() {
+            throw new com.utp.horario.domain.exception.GradeSimulationException("Fórmula oficial no disponible para simulación del curso.");
+        }
+
         @GetMapping("/test/authentication")
         public void authentication() {
             throw new AuthenticationException("Token de autenticación UTP inválido o expirado.");
@@ -174,5 +179,14 @@ class GlobalExceptionHandlerStatusTest {
                         .content("{no-json"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.success").value(false));
+    }
+
+    @Test
+    @DisplayName("GradeSimulationException -> 400 Bad Request tipado con sobre ApiResponse")
+    void gradeSimulationReturns400() throws Exception {
+        mockMvc.perform(get("/test/grade-simulation"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error").value("Fórmula oficial no disponible para simulación del curso."));
     }
 }

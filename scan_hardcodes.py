@@ -144,6 +144,19 @@ AUDIT_CHECKS = [
             "[1-9]|1[0-8]" in line
         )
     },
+    {
+        "id": "HC-WEEKS-05",
+        "category": "Semanas y Calendario",
+        "severity": "CRITICO",
+        "title": "Retorno fijo de 18 semanas como fallback",
+        "desc": "Se devuelve 'return 18;' en vez de lanzar excepción tipada ante fechas de periodo nulas.",
+        "file_pattern": r".*\.java$",
+        "match_fn": lambda line, fname: (
+            bool(re.search(r'\breturn\s+18\s*;', line))
+            and not line.strip().startswith("//")
+            and not line.strip().startswith("*")
+        )
+    },
 
     # -------------------------------------------------------------
     # 3. IDENTIDAD Y FALLBACKS SILENCIOSOS (ALTO)
