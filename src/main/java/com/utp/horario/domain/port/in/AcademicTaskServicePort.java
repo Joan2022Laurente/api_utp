@@ -11,6 +11,12 @@ public interface AcademicTaskServicePort {
 
     com.fasterxml.jackson.databind.JsonNode getSectionFull(String sectionId, String token);
 
+    com.utp.horario.domain.model.SectionCurriculumTree getSectionCurriculum(String sectionId, String token);
+
+    com.utp.horario.domain.model.WeekAcademicContext getWeekContext(String sectionId, int weekNumber, String token);
+
+    com.utp.horario.domain.model.MaterialTextExtraction extractMaterialText(String sectionId, String materialId, String pages, int maxChars, String token);
+
     List<AcademicActivity> getCalendarActivities(String dateToQuery, String intervalMode, String token);
     List<AcademicActivity> getCalendarActivitiesFiltered(String dateToQuery, String intervalMode, String token, Integer week, String status, Boolean onlyGraded, String type);
     List<AcademicActivity> getUpcomingEvaluations(String token, int limit);

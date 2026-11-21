@@ -32,5 +32,7 @@ public class TaskSpecification {
     private String rubricName;
     private Double rubricScore;
     private List<RubricCriterion> gradingRubric;
+    private Boolean rubricAvailable;
+    private List<TaskAttachment> attachments;
     private SyllabusCorrelation syllabusCorrelation; // Vinculación con el sílabo oficial
 }

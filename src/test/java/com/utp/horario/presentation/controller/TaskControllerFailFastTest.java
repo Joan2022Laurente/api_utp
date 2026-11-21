@@ -85,12 +85,23 @@ class TaskControllerFailFastTest {
     @DisplayName("GET /tasks/{sectionId}/{activityId} con Bearer válido responde 200")
     void getTaskDetailWithValidTokenResponds200() throws Exception {
         when(taskServicePort.getTaskDetail(anyString(), anyString(), anyString()))
-                .thenReturn(TaskSpecification.builder().id("act-456").title("Ensayo").build());
+                .thenReturn(TaskSpecification.builder()
+                        .id("act-456")
+                        .title("Ensayo")
+                        .rubricAvailable(true)
+                        .attachments(List.of(com.utp.horario.domain.model.TaskAttachment.builder()
+                                .id("att-1")
+                                .name("Guia.pdf")
+                                .url("https://s3.amazonaws.com/Guia.pdf")
+                                .build()))
+                        .build());
 
         mockMvc.perform(get("/tasks/sec-123/act-456")
                         .header("Authorization", "Bearer " + TestTokens.validFor("U23307609")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.title").value("Ensayo"));
+                .andExpect(jsonPath("$.data.title").value("Ensayo"))
+                .andExpect(jsonPath("$.data.rubricAvailable").value(true))
+                .andExpect(jsonPath("$.data.attachments[0].name").value("Guia.pdf"));
     }
 }

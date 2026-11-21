@@ -14,7 +14,13 @@ import com.utp.horario.domain.model.RubricCriterion;
 import com.utp.horario.domain.model.RubricLevel;
 import com.utp.horario.domain.model.ScheduleInterval;
 import com.utp.horario.domain.model.ScheduleItemParsingResult;
+import com.utp.horario.domain.model.SectionCurriculumTree;
+import com.utp.horario.domain.model.SectionMaterial;
+import com.utp.horario.domain.model.SectionTopic;
+import com.utp.horario.domain.model.SectionUnit;
+import com.utp.horario.domain.model.SectionWeek;
 import com.utp.horario.domain.model.StudentProfile;
+import com.utp.horario.domain.model.TaskAttachment;
 import com.utp.horario.domain.model.TaskSpecification;
 import com.utp.horario.domain.port.out.UtpPortalGatewayPort;
 import com.utp.horario.domain.util.CourseNameNormalizer;
@@ -149,6 +155,10 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 throw new AuthenticationException(
                         "Token de sesión UTP no autorizado o expirado al consultar periodos académicos (HTTP " + resp.statusCode() + ").");
             }
+            if (resp.statusCode() == 404) {
+                throw new ResourceNotFoundException(
+                        "Periodos académicos no encontrados en UTP (HTTP 404).");
+            }
             if (resp.statusCode() != 200) {
                 throw new UpstreamServiceException(
                         "Fallo upstream al consultar los periodos académicos de UTP (HTTP " + resp.statusCode() + ").");
@@ -206,7 +216,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
             }
             throw new UpstreamServiceException(
                     "La respuesta de periodos académicos de UTP no es un array JSON válido.");
-        } catch (AuthenticationException | UpstreamServiceException e) {
+        } catch (AuthenticationException | ResourceNotFoundException | UpstreamServiceException e) {
             throw e;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -287,11 +297,11 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 JsonNode payload = objectMapper.readTree(decoded);
                 if (payload.hasNonNull("preferred_username")) {
                     String val = payload.path("preferred_username").asText().trim().toUpperCase();
-                    if (!val.isBlank()) return val;
+                    if (val.matches("^[U]?\\d{8,9}$")) return val;
                 }
                 if (payload.hasNonNull("username")) {
                     String val = payload.path("username").asText().trim().toUpperCase();
-                    if (!val.isBlank()) return val;
+                    if (val.matches("^[U]?\\d{8,9}$")) return val;
                 }
                 if (payload.hasNonNull("sub")) {
                     String sub = payload.path("sub").asText().trim().toUpperCase();
@@ -567,6 +577,8 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                     if (!campusDesc.isBlank()) campus = campusDesc;
                 }
             }
+        } catch (AuthenticationException e) {
+            throw e;
         } catch (Exception e) {
             log.warn("[UTP Portal Enrich] No se pudo obtener getProfile: {}", e.getMessage());
         }
@@ -598,6 +610,8 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                     }
                 }
             }
+        } catch (AuthenticationException e) {
+            throw e;
         } catch (Exception e) {
             log.warn("[UTP Portal Enrich] No se pudo obtener GetCourseSummary: {}", e.getMessage());
         }
@@ -1383,6 +1397,128 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
     }
 
     @Override
+    public SectionCurriculumTree fetchSectionCurriculum(String sectionId, String token) {
+        String effectiveToken = (token != null && token.startsWith("Bearer ")) ? token.substring(7).trim() : token;
+        JsonNode root = fetchSectionFull(sectionId, effectiveToken);
+        return parseSectionTree(sectionId, effectiveToken, root);
+    }
+
+    public SectionCurriculumTree parseSectionTree(String sectionId, String token, JsonNode node) {
+        if (node == null || node.isNull()) {
+            return SectionCurriculumTree.builder().sectionId(sectionId).units(List.of()).build();
+        }
+
+        String courseCode = resolveCourseCode(sectionId, null, token);
+
+        JsonNode unitsArray = null;
+        if (node.isArray()) {
+            unitsArray = node;
+        } else if (node.has("units") && node.get("units").isArray()) {
+            unitsArray = node.get("units");
+        } else if (node.has("unities") && node.get("unities").isArray()) {
+            unitsArray = node.get("unities");
+        }
+
+        List<SectionUnit> units = new ArrayList<>();
+        if (unitsArray != null) {
+            int unitIdx = 1;
+            for (JsonNode uNode : unitsArray) {
+                int unitNum = uNode.hasNonNull("unitNumber") ? uNode.get("unitNumber").asInt()
+                        : (uNode.hasNonNull("number") ? uNode.get("number").asInt() : unitIdx++);
+                String unitTitle = uNode.hasNonNull("title") ? uNode.get("title").asText()
+                        : (uNode.hasNonNull("name") ? uNode.get("name").asText("Unidad " + unitNum) : "Unidad " + unitNum);
+
+                JsonNode weeksArray = null;
+                if (uNode.has("weeks") && uNode.get("weeks").isArray()) {
+                    weeksArray = uNode.get("weeks");
+                } else if (uNode.has("themes") && uNode.get("themes").isArray()) {
+                    weeksArray = uNode.get("themes");
+                }
+
+                List<SectionWeek> weeks = new ArrayList<>();
+                if (weeksArray != null) {
+                    int weekIdx = 1;
+                    for (JsonNode wNode : weeksArray) {
+                        int weekNum = wNode.hasNonNull("weekNumber") ? wNode.get("weekNumber").asInt()
+                                : (wNode.hasNonNull("number") ? wNode.get("number").asInt() : weekIdx++);
+                        String weekName = wNode.hasNonNull("name") ? wNode.get("name").asText()
+                                : (wNode.hasNonNull("title") ? wNode.get("title").asText("Semana " + weekNum) : "Semana " + weekNum);
+
+                        JsonNode topicsArray = null;
+                        if (wNode.has("topics") && wNode.get("topics").isArray()) {
+                            topicsArray = wNode.get("topics");
+                        } else if (wNode.has("contents") && wNode.get("contents").isArray()) {
+                            topicsArray = wNode.get("contents");
+                        }
+
+                        List<SectionTopic> topics = new ArrayList<>();
+                        if (topicsArray != null) {
+                            for (JsonNode tNode : topicsArray) {
+                                String topicId = tNode.hasNonNull("id") ? tNode.get("id").asText()
+                                        : (tNode.hasNonNull("topicId") ? tNode.get("topicId").asText(null) : null);
+                                String topicName = tNode.hasNonNull("name") ? tNode.get("name").asText()
+                                        : (tNode.hasNonNull("title") ? tNode.get("title").asText("Tema") : "Tema");
+
+                                List<SectionMaterial> materials = new ArrayList<>();
+                                if (tNode.has("materials") && tNode.get("materials").isArray()) {
+                                    for (JsonNode mNode : tNode.get("materials")) {
+                                        materials.add(SectionMaterial.builder()
+                                                .id(mNode.hasNonNull("id") ? mNode.get("id").asText() : mNode.path("materialId").asText(null))
+                                                .title(mNode.path("title").asText(mNode.path("name").asText("Material")))
+                                                .type(mNode.path("type").asText("DOCUMENT"))
+                                                .url(mNode.path("url").asText(null))
+                                                .viewed(mNode.hasNonNull("viewed") ? mNode.get("viewed").asBoolean() : null)
+                                                .build());
+                                    }
+                                } else if (tNode.has("url") && !tNode.path("url").asText("").isBlank()) {
+                                    materials.add(SectionMaterial.builder()
+                                            .id(topicId)
+                                            .title(topicName)
+                                            .type(tNode.path("type").asText("DOCUMENT"))
+                                            .url(tNode.path("url").asText(null))
+                                            .viewed(tNode.hasNonNull("viewed") ? tNode.get("viewed").asBoolean() : null)
+                                            .build());
+                                }
+
+                                topics.add(SectionTopic.builder()
+                                        .id(topicId)
+                                        .name(topicName)
+                                        .materials(materials)
+                                        .build());
+                            }
+                        }
+
+                        weeks.add(SectionWeek.builder()
+                                .weekNumber(weekNum)
+                                .name(weekName)
+                                .topics(topics)
+                                .build());
+                    }
+                }
+
+                units.add(SectionUnit.builder()
+                        .unitNumber(unitNum)
+                        .title(unitTitle)
+                        .weeks(weeks)
+                        .build());
+            }
+        }
+
+        Integer numWeeks = node.hasNonNull("numWeeks") ? node.get("numWeeks").asInt() : null;
+        Integer currentWeek = node.hasNonNull("currentWeek") ? node.get("currentWeek").asInt() : null;
+        String courseId = node.hasNonNull("courseId") ? node.get("courseId").asText() : null;
+
+        return SectionCurriculumTree.builder()
+                .sectionId(sectionId)
+                .courseId(courseId)
+                .courseCode(courseCode)
+                .numWeeks(numWeeks)
+                .currentWeek(currentWeek)
+                .units(units)
+                .build();
+    }
+
+    @Override
     public TaskSpecification fetchTaskSpecification(String sectionId, String activityId, String token) {
         String effectiveToken = (token != null && token.startsWith("Bearer ")) ? token.substring(7).trim() : token;
         if (effectiveToken == null || effectiveToken.isBlank()) {
@@ -1494,6 +1630,21 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
 
                 Integer attempts = data.hasNonNull("attempts") ? data.path("attempts").asInt() : 1;
 
+                List<TaskAttachment> attachments = new ArrayList<>();
+                if (data.has("files") && data.path("files").isArray()) {
+                    for (JsonNode f : data.path("files")) {
+                        attachments.add(TaskAttachment.builder()
+                                .id(f.path("id").asText(null))
+                                .name(f.path("name").asText(f.path("filename").asText("Adjunto")))
+                                .url(f.path("url").asText(null))
+                                .type(f.path("type").asText(null))
+                                .size(f.hasNonNull("size") ? f.path("size").asLong() : null)
+                                .build());
+                    }
+                }
+
+                boolean rubricAvailable = !rubricCriterions.isEmpty();
+
                 return TaskSpecification.builder()
                         .id(data.path("id").asText(activityId))
                         .title(title)
@@ -1515,6 +1666,8 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                         .rubricName(rubricName)
                         .rubricScore(rubricScore)
                         .gradingRubric(rubricCriterions)
+                        .rubricAvailable(rubricAvailable)
+                        .attachments(attachments)
                         .build();
             } else if (resp.statusCode() == 401 || resp.statusCode() == 403) {
                 log.warn("[UtpPortalGatewayAdapter] Error de autenticación {} al obtener tarea {}", resp.statusCode(), activityId);
@@ -1687,7 +1840,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
             throw new AuthenticationException("Token de autenticación no contiene código de estudiante válido");
         }
         String effectivePeriod = (periodId != null && !periodId.isBlank())
-                ? periodId.trim()
+                ? resolveAcademicPeriod(effectiveToken, periodId.trim()).id()
                 : resolveCurrentAcademicPeriod(effectiveToken).id();
 
         String url = getPortalEndpoint();

@@ -77,4 +77,23 @@ class SyllabusScheduleFsmTest {
         assertFalse(schedule.get(0).getTopic().contains("Silberschatz"));
         assertFalse(schedule.get(1).getTopic().contains("Silberschatz"));
     }
+
+    @Test
+    @DisplayName("Debe cortar ante cabeceras numeradas como 9. BIBLIOGRAFÍA y no ante menciones internas de referencias")
+    void shouldStopAtNumberedHeadersAndNotCutInternalMentions() {
+        String input = """
+                8. CRONOGRAMA DE ACTIVIDADES
+                1 1 Tema de Sesión 1 con referencias al marco ágil Scrum
+                1 2 Tema de Sesión 2
+                9. BIBLIOGRAFÍA BÁSICA
+                1 3 Libro no deseado
+                """;
+
+        List<SyllabusWeeklySession> schedule = SyllabusScheduleFsm.buildWeeklySchedule(input, List.of());
+
+        assertNotNull(schedule);
+        assertEquals(2, schedule.size());
+        assertTrue(schedule.get(0).getTopic().contains("referencias al marco ágil Scrum"));
+        assertFalse(schedule.get(1).getTopic().contains("Libro no deseado"));
+    }
 }

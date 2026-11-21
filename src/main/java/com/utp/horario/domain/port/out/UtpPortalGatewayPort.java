@@ -21,6 +21,11 @@ public interface UtpPortalGatewayPort {
      */
     com.fasterxml.jackson.databind.JsonNode fetchSectionFull(String sectionId, String token);
 
+    /**
+     * Árbol didáctico tipado de la sección (units -> weeks -> topics -> materials).
+     */
+    com.utp.horario.domain.model.SectionCurriculumTree fetchSectionCurriculum(String sectionId, String token);
+
     List<AcademicActivity> fetchCalendarActivities(String dateToQuery, String intervalMode, String token);
     CourseSummaryData fetchCourseSummary(String periodId, String token);
 

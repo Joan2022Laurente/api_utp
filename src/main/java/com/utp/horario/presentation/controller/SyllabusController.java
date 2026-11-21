@@ -29,7 +29,7 @@ import java.util.stream.Collectors;
 
 @Tag(name = "Sílabos Oficiales", description = "Extracción, procesamiento posicional y persistencia de sílabos oficiales rectores UTP")
 @RestController
-@RequestMapping("/syllabus")
+@RequestMapping({"/syllabus", "/syllabuses"})
 @RequiredArgsConstructor
 @Slf4j
 public class SyllabusController {
@@ -169,8 +169,11 @@ public class SyllabusController {
             @RequestParam(required = false) String sectionId,
             @RequestParam(required = false) String pdfUrl,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        if (courseCode == null || courseCode.trim().isBlank()) {
+            return ResponseEntity.badRequest().body(ApiResponse.fail("Se requiere el parámetro courseCode"));
+        }
         String token = optionalBearer(authHeader);
-        String rawText = syllabusServicePort.fetchRawSyllabusText(courseCode, sectionId, pdfUrl, token);
+        String rawText = syllabusServicePort.fetchRawSyllabusText(courseCode.trim(), sectionId, pdfUrl, token);
         return ResponseEntity.ok(ApiResponse.ok("Texto de sílabo obtenido", rawText));
     }
 

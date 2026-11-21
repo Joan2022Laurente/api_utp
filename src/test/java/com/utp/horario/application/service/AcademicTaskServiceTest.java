@@ -268,4 +268,91 @@ class AcademicTaskServiceTest {
         assertEquals("Unidad 2", result.getSyllabusCorrelation().getSyllabusUnit());
         assertEquals("Controladores REST y Servicios", result.getSyllabusCorrelation().getSyllabusTopic());
     }
+
+    @Test
+    @DisplayName("Debe construir WeekAcademicContext consolidado con sílabo y temas del aula")
+    void shouldReturnWeekAcademicContextCorrectly() {
+        com.utp.horario.domain.model.SectionCurriculumTree tree = com.utp.horario.domain.model.SectionCurriculumTree.builder()
+                .sectionId("sec-1")
+                .courseCode("100000ST61")
+                .units(List.of(
+                        com.utp.horario.domain.model.SectionUnit.builder()
+                                .unitNumber(1)
+                                .title("Unidad 1")
+                                .weeks(List.of(
+                                        com.utp.horario.domain.model.SectionWeek.builder()
+                                                .weekNumber(3)
+                                                .name("Semana 3")
+                                                .topics(List.of(
+                                                        com.utp.horario.domain.model.SectionTopic.builder()
+                                                                .id("top-1")
+                                                                .name("Spring Boot y Virtual Threads")
+                                                                .materials(List.of(
+                                                                        com.utp.horario.domain.model.SectionMaterial.builder()
+                                                                                .id("mat-1")
+                                                                                .title("Diapositivas S3.pdf")
+                                                                                .type("DOCUMENT")
+                                                                                .url("https://utp-prd-upload-file-storage.s3.amazonaws.com/pao/content/s3.pdf")
+                                                                                .build()
+                                                                ))
+                                                                .build()
+                                                ))
+                                                .build()
+                                ))
+                                .build()
+                ))
+                .build();
+
+        when(gatewayPort.fetchSectionCurriculum(anyString(), anyString())).thenReturn(tree);
+        when(gatewayPort.fetchCalendarActivities(Mockito.isNull(), Mockito.eq("period"), anyString())).thenReturn(List.of());
+
+        com.utp.horario.domain.model.WeekAcademicContext ctx = service.getWeekContext("sec-1", 3, "token");
+
+        assertNotNull(ctx);
+        assertEquals(3, ctx.getWeekNumber());
+        assertEquals("sec-1", ctx.getSectionId());
+        assertEquals("100000ST61", ctx.getCourseCode());
+        assertEquals(1, ctx.getClassroomTopics().size());
+        assertEquals("Spring Boot y Virtual Threads", ctx.getClassroomTopics().get(0).getName());
+        assertEquals(1, ctx.getClassroomTopics().get(0).getMaterials().size());
+        assertEquals("COMPLETE", ctx.getCompleteness().getStatus());
+    }
+
+    @Test
+    @DisplayName("Debe rechazar semana académica menor a 1 o mayor a 30 con IllegalArgumentException")
+    void shouldRejectInvalidWeekNumberInContext() {
+        assertThrows(IllegalArgumentException.class, () -> service.getWeekContext("sec-1", 0, "token"));
+        assertThrows(IllegalArgumentException.class, () -> service.getWeekContext("sec-1", 35, "token"));
+    }
+
+    @Test
+    @DisplayName("Debe bloquear extracción de material con anti-SSRF si host no es S3/CloudFront de UTP")
+    void shouldBlockAntiSsrfForUntrustedHost() {
+        com.utp.horario.domain.model.SectionCurriculumTree tree = com.utp.horario.domain.model.SectionCurriculumTree.builder()
+                .sectionId("sec-1")
+                .units(List.of(
+                        com.utp.horario.domain.model.SectionUnit.builder()
+                                .weeks(List.of(
+                                        com.utp.horario.domain.model.SectionWeek.builder()
+                                                .topics(List.of(
+                                                        com.utp.horario.domain.model.SectionTopic.builder()
+                                                                .materials(List.of(
+                                                                        com.utp.horario.domain.model.SectionMaterial.builder()
+                                                                                .id("mat-malicioso")
+                                                                                .url("https://malicious-host.com/payload.pdf")
+                                                                                .build()
+                                                                ))
+                                                                .build()
+                                                ))
+                                                .build()
+                                ))
+                                .build()
+                ))
+                .build();
+
+        when(gatewayPort.fetchSectionCurriculum(anyString(), anyString())).thenReturn(tree);
+
+        assertThrows(SecurityException.class, () ->
+                service.extractMaterialText("sec-1", "mat-malicioso", "1-5", 5000, "token"));
+    }
 }

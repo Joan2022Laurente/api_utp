@@ -1,12 +1,24 @@
 package com.utp.horario.application.service;
 
+import com.utp.horario.domain.exception.ResourceNotFoundException;
+import com.utp.horario.domain.exception.UpstreamServiceException;
 import com.utp.horario.domain.model.AcademicActivity;
+import com.utp.horario.domain.model.CompletenessStatus;
+import com.utp.horario.domain.model.ContextProvenance;
 import com.utp.horario.domain.model.CourseSummaryData;
+import com.utp.horario.domain.model.MaterialTextExtraction;
+import com.utp.horario.domain.model.SectionCurriculumTree;
+import com.utp.horario.domain.model.SectionMaterial;
+import com.utp.horario.domain.model.SectionTopic;
+import com.utp.horario.domain.model.SectionUnit;
+import com.utp.horario.domain.model.SectionWeek;
 import com.utp.horario.domain.model.Syllabus;
 import com.utp.horario.domain.model.SyllabusCorrelation;
 import com.utp.horario.domain.model.SyllabusEvaluation;
 import com.utp.horario.domain.model.SyllabusWeeklySession;
 import com.utp.horario.domain.model.TaskSpecification;
+import com.utp.horario.domain.model.WeekAcademicContext;
+import com.utp.horario.domain.model.WeekSyllabusContext;
 import com.utp.horario.domain.port.in.AcademicTaskServicePort;
 import com.utp.horario.domain.port.out.SyllabusRepositoryPort;
 import com.utp.horario.domain.port.out.UtpPortalGatewayPort;
@@ -16,6 +28,9 @@ import org.springframework.stereotype.Service;
 
 import com.utp.horario.application.service.formula.GradeSimulatorEngine;
 import com.utp.horario.domain.model.GradeSimulationResult;
+
+import java.net.URI;
+import java.time.Duration;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -56,6 +71,287 @@ public class AcademicTaskService implements AcademicTaskServicePort {
     @Override
     public com.fasterxml.jackson.databind.JsonNode getSectionFull(String sectionId, String token) {
         return utpPortalGatewayPort.fetchSectionFull(sectionId, token);
+    }
+
+    @Override
+    public SectionCurriculumTree getSectionCurriculum(String sectionId, String token) {
+        return utpPortalGatewayPort.fetchSectionCurriculum(sectionId, token);
+    }
+
+    @Override
+    public WeekAcademicContext getWeekContext(String sectionId, int weekNumber, String token) {
+        if (sectionId == null || sectionId.isBlank()) {
+            throw new IllegalArgumentException("Se requiere sectionId para consultar el contexto de la semana.");
+        }
+        if (weekNumber < 1 || weekNumber > 30) {
+            throw new IllegalArgumentException("Número de semana inválido: " + weekNumber);
+        }
+
+        List<CompletenessStatus.GapInfo> gaps = new ArrayList<>();
+
+        // 1. Obtener árbol didáctico
+        SectionCurriculumTree curriculum = null;
+        try {
+            curriculum = utpPortalGatewayPort.fetchSectionCurriculum(sectionId, token);
+        } catch (Exception e) {
+            gaps.add(CompletenessStatus.GapInfo.builder()
+                    .source("SECTION_CURRICULUM")
+                    .ref(sectionId)
+                    .reason(e.getMessage())
+                    .build());
+        }
+
+        String courseCode = (curriculum != null && curriculum.getCourseCode() != null)
+                ? curriculum.getCourseCode()
+                : utpPortalGatewayPort.resolveCourseCode(sectionId, null, token);
+
+        // 2. Extraer temas del aula para la semana requerida
+        List<SectionTopic> classroomTopics = new ArrayList<>();
+        if (curriculum != null && curriculum.getUnits() != null) {
+            for (SectionUnit u : curriculum.getUnits()) {
+                if (u.getWeeks() != null) {
+                    for (SectionWeek w : u.getWeeks()) {
+                        if (w.getWeekNumber() != null && w.getWeekNumber() == weekNumber) {
+                            if (w.getTopics() != null) {
+                                classroomTopics.addAll(w.getTopics());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Obtener Sílabo oficial una sola vez (cero N+1)
+        WeekSyllabusContext syllabusCtx = null;
+        if (courseCode != null && !courseCode.isBlank() && syllabusRepositoryPort != null) {
+            try {
+                Optional<Syllabus> syllabusOpt = syllabusRepositoryPort.findByCourseCode(courseCode);
+                if (syllabusOpt.isPresent()) {
+                    Syllabus syl = syllabusOpt.get();
+                    SyllabusWeeklySession session = null;
+                    if (syl.getWeeklySchedule() != null) {
+                        session = syl.getWeeklySchedule().stream()
+                                .filter(s -> s != null && s.getWeek() != null && s.getWeek() == weekNumber)
+                                .findFirst()
+                                .orElse(null);
+                    }
+
+                    List<SyllabusEvaluation> evals = new ArrayList<>();
+                    if (syl.getEvaluations() != null) {
+                        evals = syl.getEvaluations().stream()
+                                .filter(ev -> ev != null && ev.getWeek() != null && ev.getWeek() == weekNumber)
+                                .collect(Collectors.toList());
+                    }
+
+                    syllabusCtx = WeekSyllabusContext.builder()
+                            .weekNumber(weekNumber)
+                            .unitTitle(session != null ? session.getUnit() : null)
+                            .topic(session != null ? session.getTopic() : null)
+                            .activities(session != null ? session.getActivities() : null)
+                            .learningGoal(syl.getLearningGoal())
+                            .scheduledEvaluations(evals)
+                            .build();
+                }
+            } catch (Exception e) {
+                gaps.add(CompletenessStatus.GapInfo.builder()
+                        .source("SYLLABUS")
+                        .ref(courseCode)
+                        .reason(e.getMessage())
+                        .build());
+            }
+        }
+
+        // 4. Obtener tareas y actividades para la semana
+        List<TaskSpecification> weekTasks = new ArrayList<>();
+        try {
+            List<AcademicActivity> activities = getCalendarActivitiesFiltered(null, "period", token, weekNumber, null, null, null);
+            for (AcademicActivity act : activities) {
+                if (act.getId() != null && !act.getId().isBlank()) {
+                    try {
+                        TaskSpecification taskSpec = getTaskDetail(sectionId, act.getId(), token);
+                        if (taskSpec != null) {
+                            weekTasks.add(taskSpec);
+                        }
+                    } catch (Exception e) {
+                        gaps.add(CompletenessStatus.GapInfo.builder()
+                                .source("HOMEWORK_RESUME")
+                                .ref(act.getId())
+                                .reason(e.getMessage())
+                                .build());
+                    }
+                }
+            }
+        } catch (Exception e) {
+            gaps.add(CompletenessStatus.GapInfo.builder()
+                    .source("CALENDAR_ACTIVITIES")
+                    .ref("week-" + weekNumber)
+                    .reason(e.getMessage())
+                    .build());
+        }
+
+        boolean rubricAvailable = weekTasks.stream()
+                .anyMatch(t -> Boolean.TRUE.equals(t.getRubricAvailable()));
+
+        CompletenessStatus completeness = CompletenessStatus.builder()
+                .status(gaps.isEmpty() ? "COMPLETE" : "PARTIAL")
+                .gaps(gaps)
+                .build();
+
+        ContextProvenance provenance = ContextProvenance.builder()
+                .syllabusSource("PDF_RECTOR_UTP")
+                .classroomSource("CANVAS_PAO_CLASS")
+                .fetchedAt(LocalDateTime.now().toString())
+                .build();
+
+        return WeekAcademicContext.builder()
+                .weekNumber(weekNumber)
+                .sectionId(sectionId)
+                .courseCode(courseCode)
+                .syllabus(syllabusCtx)
+                .classroomTopics(classroomTopics)
+                .tasks(weekTasks)
+                .rubricAvailable(rubricAvailable)
+                .completeness(completeness)
+                .provenance(provenance)
+                .build();
+    }
+
+    @Override
+    public MaterialTextExtraction extractMaterialText(String sectionId, String materialId, String pages, int maxChars, String token) {
+        if (sectionId == null || sectionId.isBlank()) {
+            throw new IllegalArgumentException("Se requiere sectionId para extraer texto del material.");
+        }
+        if (materialId == null || materialId.isBlank()) {
+            throw new IllegalArgumentException("Se requiere materialId para extraer texto del material.");
+        }
+
+        // 1. Obtener árbol para encontrar el material y validar pertenencia
+        SectionCurriculumTree curriculum = utpPortalGatewayPort.fetchSectionCurriculum(sectionId, token);
+        SectionMaterial matchedMaterial = null;
+        if (curriculum != null && curriculum.getUnits() != null) {
+            for (SectionUnit u : curriculum.getUnits()) {
+                if (u.getWeeks() != null) {
+                    for (SectionWeek w : u.getWeeks()) {
+                        if (w.getTopics() != null) {
+                            for (SectionTopic t : w.getTopics()) {
+                                if (t.getMaterials() != null) {
+                                    for (SectionMaterial m : t.getMaterials()) {
+                                        if (materialId.equalsIgnoreCase(m.getId())) {
+                                            matchedMaterial = m;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (matchedMaterial == null) {
+            throw new ResourceNotFoundException("Material con ID " + materialId + " no encontrado en la sección " + sectionId);
+        }
+
+        String fileUrl = matchedMaterial.getUrl();
+        if (fileUrl == null || fileUrl.isBlank()) {
+            throw new IllegalArgumentException("El material " + materialId + " no posee una URL de descarga asociada.");
+        }
+
+        // Anti-SSRF: solo permitir dominios autorizados de S3 / CloudFront de UTP
+        try {
+            URI uri = URI.create(fileUrl);
+            String host = uri.getHost() != null ? uri.getHost().toLowerCase() : "";
+            if (!host.endsWith(".amazonaws.com") && !host.endsWith(".cloudfront.net") && !host.endsWith("utp.edu.pe")) {
+                throw new SecurityException("Host no autorizado para descarga de materiales: " + host);
+            }
+        } catch (IllegalArgumentException e) {
+            throw new SecurityException("URL de material inválida: " + fileUrl);
+        }
+
+        // Descarga del documento
+        int maxCharLimit = (maxChars > 0 && maxChars <= 50000) ? maxChars : 8000;
+        List<Integer> extractedPages = new ArrayList<>();
+        StringBuilder textBuilder = new StringBuilder();
+        String quality = "HIGH";
+
+        try {
+            java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
+                    .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
+                    .connectTimeout(Duration.ofSeconds(10))
+                    .build();
+
+            java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder()
+                    .uri(URI.create(fileUrl))
+                    .timeout(Duration.ofSeconds(20))
+                    .GET()
+                    .build();
+
+            java.net.http.HttpResponse<byte[]> resp = client.send(req, java.net.http.HttpResponse.BodyHandlers.ofByteArray());
+            if (resp.statusCode() != 200) {
+                throw new UpstreamServiceException("Fallo al descargar material desde storage (HTTP " + resp.statusCode() + ").");
+            }
+
+            byte[] pdfBytes = resp.body();
+            // Parsear con PDFBox
+            try (org.apache.pdfbox.pdmodel.PDDocument document = org.apache.pdfbox.Loader.loadPDF(pdfBytes)) {
+                int totalPages = document.getNumberOfPages();
+                int startPage = 1;
+                int endPage = Math.min(10, totalPages);
+
+                if (pages != null && !pages.isBlank()) {
+                    String[] parts = pages.split("-");
+                    try {
+                        startPage = Math.max(1, Integer.parseInt(parts[0].trim()));
+                        if (parts.length > 1) {
+                            endPage = Math.min(totalPages, Integer.parseInt(parts[1].trim()));
+                        } else {
+                            endPage = startPage;
+                        }
+                    } catch (NumberFormatException ignored) {}
+                }
+
+                org.apache.pdfbox.text.PDFTextStripper stripper = new org.apache.pdfbox.text.PDFTextStripper();
+                for (int p = startPage; p <= endPage; p++) {
+                    stripper.setStartPage(p);
+                    stripper.setEndPage(p);
+                    String pageText = stripper.getText(document).trim();
+                    if (!pageText.isEmpty()) {
+                        extractedPages.add(p);
+                        textBuilder.append("### Página ").append(p).append("\n\n").append(pageText).append("\n\n");
+                    }
+                    if (textBuilder.length() >= maxCharLimit) {
+                        break;
+                    }
+                }
+            }
+
+            if (textBuilder.length() > maxCharLimit) {
+                textBuilder.setLength(maxCharLimit);
+                textBuilder.append("\n\n... [Contenido truncado por límite de caracteres]");
+            }
+
+            if (extractedPages.isEmpty()) {
+                quality = "NO_TEXT";
+            } else if (textBuilder.length() < 100) {
+                quality = "LOW";
+            }
+
+        } catch (SecurityException | ResourceNotFoundException | UpstreamServiceException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new UpstreamServiceException("Error durante la extracción de texto del material " + materialId + ": " + e.getMessage(), e);
+        }
+
+        return MaterialTextExtraction.builder()
+                .materialId(materialId)
+                .title(matchedMaterial.getTitle())
+                .url(fileUrl)
+                .pagesExtracted(extractedPages)
+                .totalLength(textBuilder.length())
+                .contentMarkdown(textBuilder.toString())
+                .quality(quality)
+                .build();
     }
 
     @Override

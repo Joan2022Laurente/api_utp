@@ -112,4 +112,20 @@ class SyllabusControllerAuthorizationTest {
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.success").value(false));
     }
+
+    @Test
+    @DisplayName("El alias /syllabuses/{courseCode} responde 200 igual que /syllabus")
+    void aliasSyllabusesResponds200() throws Exception {
+        mockMvc.perform(get("/syllabuses/{courseCode}", "100000ST61"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true));
+    }
+
+    @Test
+    @DisplayName("GET /syllabus/raw-text con courseCode en blanco responde 400 Bad Request")
+    void rawTextWithBlankCourseCodeResponds400() throws Exception {
+        mockMvc.perform(get("/syllabus/raw-text").param("courseCode", "   "))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false));
+    }
 }
