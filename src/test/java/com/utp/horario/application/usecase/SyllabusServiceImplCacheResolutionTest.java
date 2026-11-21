@@ -103,7 +103,7 @@ class SyllabusServiceImplCacheResolutionTest {
     @DisplayName("Un sectionId numerico del Portal resuelve el codigo de catalogo y localiza la cache")
     void portalNumericSectionResolvesCatalogCode() {
         cache.put(CATALOG_CODE, Optional.of(cachedSyllabus()));
-        when(gateway.fetchCourseSummary(anyString(), anyString())).thenReturn(CourseSummaryData.builder()
+        when(gateway.fetchCourseSummary(any(), anyString())).thenReturn(CourseSummaryData.builder()
                 .periodId("2263")
                 .courses(List.of(CourseSummaryData.CourseGradeItem.builder()
                         .courseCode(CATALOG_CODE).courseName(COURSE_NAME).section(PORTAL_SECTION).build()))

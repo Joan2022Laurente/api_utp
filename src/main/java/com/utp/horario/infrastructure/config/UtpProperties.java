@@ -34,19 +34,4 @@ public class UtpProperties {
      * Mapeo estático de fallback paoUserId por código de alumno.
      */
     private String paoUserMap = "";
-
-    /**
-     * ID de periodo académico predeterminado (ej. 2263 para 2026-2).
-     */
-    private String defaultPeriodId = "2263";
-
-    /**
-     * Nombre textual del periodo académico predeterminado.
-     */
-    private String defaultPeriodName = "2026 - Ciclo 2 Agosto";
-
-    /**
-     * Fecha de inicio oficial del periodo académico en formato ISO (yyyy-MM-dd).
-     */
-    private String defaultPeriodStartDate = "2026-08-10";
 }

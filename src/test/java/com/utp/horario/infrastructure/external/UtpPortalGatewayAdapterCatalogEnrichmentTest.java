@@ -57,12 +57,18 @@ class UtpPortalGatewayAdapterCatalogEnrichmentTest {
             ]}]}}}
             """;
 
+    private static final String FAKE_ACADEMIC_PERIODS =
+            "[{\"id\":\"2263\",\"code\":\"2026-2\",\"name\":\"2026 - Ciclo 2 Agosto\",\"isCurrent\":true,\"startDate\":\"2026-08-15\",\"endDate\":\"2026-12-13\"}]";
+
     private static UtpPortalGatewayAdapter adapterWithDashboard(int dashboardStatus, String dashboardBody,
                                                                  int graphqlStatus, String graphqlBody) {
         FakeHttpClient client = new FakeHttpClient(request -> {
             String uri = request.uri().toString();
             if (uri.contains("/dashboard-courses")) {
                 return new FakeHttpClient.Response(dashboardStatus, dashboardBody);
+            }
+            if (uri.contains("/academicperiods")) {
+                return new FakeHttpClient.Response(200, FAKE_ACADEMIC_PERIODS);
             }
             if (uri.contains("/graphql")) {
                 return new FakeHttpClient.Response(graphqlStatus, graphqlBody);
@@ -258,6 +264,9 @@ class UtpPortalGatewayAdapterCatalogEnrichmentTest {
             boolean isJoan = auth.contains(tokenJoan);
             if (uri.contains("/dashboard-courses")) {
                 return new FakeHttpClient.Response(200, isJoan ? dashboardJoan : dashboardStudentB);
+            }
+            if (uri.contains("/academicperiods")) {
+                return new FakeHttpClient.Response(200, FAKE_ACADEMIC_PERIODS);
             }
             if (uri.contains("/graphql")) {
                 return new FakeHttpClient.Response(200, isJoan ? graphqlJoan : graphqlStudentB);

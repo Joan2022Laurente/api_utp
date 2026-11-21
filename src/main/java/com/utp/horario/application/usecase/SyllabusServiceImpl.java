@@ -69,12 +69,6 @@ public class SyllabusServiceImpl implements SyllabusServicePort {
              syllabusMarkdownExporter, syllabusSanitizer, syllabusValidator, new UtpProperties());
     }
 
-    private String getOfficialPeriodId() {
-        return (utpProperties != null && utpProperties.getDefaultPeriodId() != null && !utpProperties.getDefaultPeriodId().isBlank())
-                ? utpProperties.getDefaultPeriodId()
-                : "2263";
-    }
-
     /**
      * Localiza el sílabo en la cache (Supabase + replica local).
      *
@@ -159,7 +153,7 @@ public class SyllabusServiceImpl implements SyllabusServicePort {
         // 2) Seccion numerica del Portal -> resumen oficial de cursos.
         if (section.matches("^\\d{4,8}$")) {
             try {
-                CourseSummaryData summary = utpPortalGatewayPort.fetchCourseSummary(getOfficialPeriodId(), token);
+                CourseSummaryData summary = utpPortalGatewayPort.fetchCourseSummary(null, token);
                 if (summary != null && summary.getCourses() != null) {
                     summary.getCourses().stream()
                             .filter(c -> section.equals(c.getSection()) || section.equals(c.getCourseId()))
@@ -308,7 +302,7 @@ public class SyllabusServiceImpl implements SyllabusServicePort {
             return null;
         }
         try {
-            CourseSummaryData summary = utpPortalGatewayPort.fetchCourseSummary(getOfficialPeriodId(), token);
+            CourseSummaryData summary = utpPortalGatewayPort.fetchCourseSummary(null, token);
             if (summary == null || summary.getCourses() == null || summary.getCourses().isEmpty()) {
                 return null;
             }

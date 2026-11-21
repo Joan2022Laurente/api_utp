@@ -1,6 +1,7 @@
 package com.utp.horario.presentation.exception;
 
 import com.utp.horario.domain.exception.AuthenticationException;
+import com.utp.horario.domain.exception.GradeSimulationException;
 import com.utp.horario.domain.exception.ResourceNotFoundException;
 import com.utp.horario.domain.exception.UpstreamServiceException;
 import com.utp.horario.presentation.dto.ApiResponse;
@@ -100,6 +101,11 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResponse<Void>> handleIllegalArgument(IllegalArgumentException e) {
         String message = e.getMessage() != null ? e.getMessage() : "Parámetros de solicitud inválidos";
         return badRequest(message);
+    }
+
+    @ExceptionHandler(GradeSimulationException.class)
+    public ResponseEntity<ApiResponse<Void>> handleGradeSimulation(GradeSimulationException e) {
+        return badRequest(e.getMessage());
     }
 
     // ------------------------------------------------------------------

@@ -69,7 +69,7 @@ public class SyllabusTableReconstructor {
                     if (blockLines.length > 0) {
                         String firstLine = blockLines[0].replaceAll("\\s+", " ");
                         Pattern rowPattern = Pattern.compile(
-                                "^([\\p{L}\\s\\-_/.]+?(?:\\s+[1-9])?)\\s+([1-9]|1[0-8])\\b(?:\\s+(.*))?$",
+                                "^([\\p{L}\\s\\-_/.]+?(?:\\s+[1-9])?)\\s+([1-9]|[1-4][0-9])\\b(?:\\s+(.*))?$",
                                 Pattern.CASE_INSENSITIVE
                         );
                         Matcher rowMatcher = rowPattern.matcher(firstLine);
@@ -79,7 +79,7 @@ public class SyllabusTableReconstructor {
                             week = Integer.parseInt(rowMatcher.group(2));
                             obsText = rowMatcher.group(3) != null ? rowMatcher.group(3).trim() : "";
                         } else {
-                            Matcher numMatcher = Pattern.compile("\\b([1-9]|1[0-8])\\b").matcher(firstLine);
+                            Matcher numMatcher = Pattern.compile("\\b([1-9]|[1-4][0-9])\\b").matcher(firstLine);
                             if (numMatcher.find()) {
                                 week = Integer.parseInt(numMatcher.group(1));
                                 desc = firstLine.substring(0, numMatcher.start()).trim();
@@ -98,7 +98,7 @@ public class SyllabusTableReconstructor {
 
                             // Si la semana no se halló en la primera línea, verificar si la línea secundaria contiene el número de semana
                             if (week == null) {
-                                Matcher standaloneWeekMatcher = Pattern.compile("^([1-9]|1[0-8])(?:\\s+(.*))?$").matcher(extraLine);
+                                Matcher standaloneWeekMatcher = Pattern.compile("^([1-9]|[1-4][0-9])(?:\\s+(.*))?$").matcher(extraLine);
                                 if (standaloneWeekMatcher.matches()) {
                                     week = Integer.parseInt(standaloneWeekMatcher.group(1));
                                     String rest = standaloneWeekMatcher.group(2);
@@ -160,12 +160,10 @@ public class SyllabusTableReconstructor {
 
     private static String determineModality(String type, String desc, String obs) {
         String combined = (type + " " + desc + " " + obs).toLowerCase();
-        if (combined.contains("grupal") || combined.contains("proyecto") || combined.contains("sustentación")
-                || type.equalsIgnoreCase("PROY") || type.equalsIgnoreCase("TI") || type.equalsIgnoreCase("TF")
-                || type.startsWith("ATI") || type.startsWith("APF")) {
-            return "Grupal";
-        }
-        return "Individual";
+        if (combined.contains("grupal")) return "Grupal";
+        if (combined.contains("individual")) return "Individual";
+        // Si el PDF no declara modalidad explícitamente, se retorna null: nunca se inventa.
+        return null;
     }
 
 }

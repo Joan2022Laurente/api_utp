@@ -43,9 +43,6 @@ utp:
   # Endpoints de pasarelas institucionales UTP (sobreescribibles por entorno sin recompilar)
   portal-url: ${UTP_PORTAL_URL:https://api-portal.utpxpedition.com/graphql}
   pao-base-url: ${UTP_PAO_BASE_URL:https://api-pao.utpxpedition.com}
-  default-period-id: ${UTP_DEFAULT_PERIOD_ID:2263}
-  default-period-name: ${UTP_DEFAULT_PERIOD_NAME:2026 - Ciclo 2 Agosto}
-  default-period-start-date: ${UTP_DEFAULT_PERIOD_START_DATE:2026-08-10}
   # Namespace UUID v5 de la plataforma UTP+Class, usado para derivar el 'paoUserId'
   # de cada alumno (uuidv5(namespace, email_en_mayusculas)), igual que hace la SPA oficial.
   # Sobrescribible si la plataforma cambia su namespace.

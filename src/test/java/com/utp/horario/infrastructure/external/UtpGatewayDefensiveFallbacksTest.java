@@ -83,6 +83,10 @@ class UtpGatewayDefensiveFallbacksTest {
                           "period":"2263","name":"SERVICIOS CLOUD","modality":"P"}]}
                         """);
             }
+            if (uri.contains("/academicperiods")) {
+                return new FakeHttpClient.Response(200,
+                        "[{\"id\":\"2263\",\"code\":\"2026-2\",\"name\":\"2026 - Ciclo 2 Agosto\",\"isCurrent\":true,\"startDate\":\"2026-08-15\",\"endDate\":\"2026-12-13\"}]");
+            }
             return new FakeHttpClient.Response(200, """
                     {"data":{"scheduleByDate":{"dates":[{"date":"2026-09-21","items":[
                       {"name":"SERVICIOS CLOUD","period":"2263","class":{

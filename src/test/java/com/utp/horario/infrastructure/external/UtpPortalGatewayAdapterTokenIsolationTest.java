@@ -47,7 +47,7 @@ class UtpPortalGatewayAdapterTokenIsolationTest {
     @Test
     @DisplayName("Una petición con token propio resuelve exclusivamente ese token")
     void requestWithOwnTokenUsesOnlyThatToken() throws Exception {
-        Method resolve = UtpPortalGatewayAdapter.class.getDeclaredMethod("resolveEffectiveToken", String.class);
+        Method resolve = UtpPortalGatewayAdapter.class.getDeclaredMethod("stripBearerPrefix", String.class);
         resolve.setAccessible(true);
 
         String own = TestTokens.validFor("U21200000");

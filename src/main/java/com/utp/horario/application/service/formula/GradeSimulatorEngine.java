@@ -4,6 +4,7 @@ import com.utp.horario.domain.model.CourseSummaryData.CourseGradeItem;
 import com.utp.horario.domain.model.CourseSummaryData.EvaluationGrade;
 import com.utp.horario.domain.model.EvaluationSimulationItem;
 import com.utp.horario.domain.model.GradeSimulationResult;
+import com.utp.horario.domain.exception.GradeSimulationException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -41,7 +42,7 @@ public class GradeSimulatorEngine {
 
         // Sin fórmula oficial no hay simulación posible: no se inventan ponderaciones.
         if (terms.isEmpty()) {
-            throw new IllegalStateException(
+            throw new GradeSimulationException(
                     "Fórmula oficial no disponible para simulación del curso '"
                             + course.getCourseCode() + "'.");
         }

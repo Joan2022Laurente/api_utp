@@ -67,7 +67,7 @@ public class SyllabusScheduleFsm {
                     try {
                         int s = Integer.parseInt(w.text().replaceAll("[^0-9]", ""));
                         int lastS = markers.isEmpty() ? 0 : markers.get(markers.size() - 1).session();
-                        if (s > lastS && s <= 36) {
+                        if (s > lastS && s > 0) {
                             markers.add(new SessionMarker(s, line.getPage(), line.getBaselineY()));
                             break;
                         }
@@ -247,13 +247,13 @@ public class SyllabusScheduleFsm {
 
                             if (g1 != null) {
                                 int s = Integer.parseInt(g2);
-                                if (s > currentSession && s <= 36) {
+                                if (s > currentSession && s > 0) {
                                     matchedSession = s;
                                     matchedInline = rest;
                                 }
                             } else if (g2 != null) {
                                 int s = Integer.parseInt(g2);
-                                if (s > currentSession && s <= 36) {
+                                if (s > currentSession && s > 0) {
                                     matchedSession = s;
                                     matchedInline = rest;
                                 }
@@ -280,7 +280,7 @@ public class SyllabusScheduleFsm {
                         }
 
                         // Acumular texto a la sesión actual
-                        if (currentSession >= 1 && currentSession <= 36) {
+                        if (currentSession >= 1) {
                             if (currentTopic.length() > 0) {
                                 if (!currentTopic.toString().contains(trimmed)) {
                                     currentTopic.append(" ").append(trimmed);

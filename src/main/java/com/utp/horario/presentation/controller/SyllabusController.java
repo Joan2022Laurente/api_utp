@@ -67,7 +67,7 @@ public class SyllabusController {
             @RequestParam(required = false) String studentId,
             @Parameter(description = "Alcance del catálogo: 'all' (todos los sílabos) o 'student' (filtrado por matrícula del estudiante)", example = "all")
             @RequestParam(defaultValue = "all") String scope,
-            @Parameter(description = "Periodo académico (ej. 2026 - Ciclo 2 Agosto). Si se omite, se usa el configurado.")
+            @Parameter(description = "Periodo académico tal como lo devuelve /academicperiods (campo 'name'). Si se omite, se resuelve dinámicamente del token.")
             @RequestParam(required = false) String period,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         String effectiveStudentId = (studentId != null && !studentId.isBlank()) ? studentId : "current-student";

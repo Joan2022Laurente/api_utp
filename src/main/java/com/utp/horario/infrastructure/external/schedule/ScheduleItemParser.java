@@ -116,7 +116,8 @@ public final class ScheduleItemParser {
             floor = text(location.get("classRoom"), "floor");
         }
 
-        String id = firstNonBlank(text(cls, "id"), "gql-" + startEpoch);
+        // Si la API GraphQL no devuelve un 'id' oficial, se deja null: nunca se fabrica un identificador sintético.
+        String id = text(cls, "id");
         LocalDateTime startAt = LocalDateTime.ofInstant(Instant.ofEpochMilli(startEpoch), LIMA);
         LocalDateTime finishAt = LocalDateTime.ofInstant(Instant.ofEpochMilli(endEpoch), LIMA);
 

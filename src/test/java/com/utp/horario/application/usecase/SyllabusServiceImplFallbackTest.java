@@ -151,7 +151,7 @@ class SyllabusServiceImplFallbackTest {
                                 CourseSummaryData.EvaluationGrade.builder().shortName("TI").name("TRABAJO").build()))
                         .build()))
                 .build();
-        when(gateway.fetchCourseSummary(anyString(), anyString())).thenReturn(summary);
+        when(gateway.fetchCourseSummary(any(), anyString())).thenReturn(summary);
 
         Syllabus result = service.getSyllabus(COURSE, null, null, TOKEN);
 
@@ -250,7 +250,7 @@ class SyllabusServiceImplFallbackTest {
                                 CourseSummaryData.EvaluationGrade.builder().shortName("PROY").name("Proyecto").build()))
                         .build()))
                 .build();
-        when(gateway.fetchCourseSummary(anyString(), anyString())).thenReturn(summary);
+        when(gateway.fetchCourseSummary(any(), anyString())).thenReturn(summary);
 
         assertThrows(UpstreamServiceException.class,
                 () -> service.getSyllabus(COURSE, null, null, TOKEN));
