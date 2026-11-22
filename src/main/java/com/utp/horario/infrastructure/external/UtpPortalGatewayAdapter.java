@@ -260,15 +260,26 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                     }
                 }
 
-                // Si la institución no reporta isCurrent=true (vacaciones, receso intersemestral o cambio de ciclo),
-                // seleccionar el periodo más reciente por cronograma institucional real.
-                AcademicPeriodInfo latest = parsedPeriods.stream()
-                        .max(Comparator.comparing(
-                                (AcademicPeriodInfo p) -> p.endDate() != null ? p.endDate() : (p.startDate() != null ? p.startDate() : LocalDate.MIN)
-                        ))
-                        .orElse(parsedPeriods.get(0));
+                // Filtrar periodos académicos regulares válidos (excluyendo contenedores transversales/permanentes 9999 o sin fechas)
+                List<AcademicPeriodInfo> validSemesterPeriods = parsedPeriods.stream()
+                        .filter(p -> p.startDate() != null && p.endDate() != null)
+                        .filter(p -> (p.code() == null || !p.code().startsWith("9999"))
+                                && (p.id() == null || !p.id().startsWith("9999"))
+                                && (p.name() == null || !p.name().toLowerCase().contains("predeterminado")))
+                        .toList();
 
-                log.info("[resolveAcademicPeriod] Ningún periodo activo con isCurrent=true. Seleccionando el periodo más reciente por cronograma institucional: '{}' (ID: {}, código: {})",
+                if (validSemesterPeriods.isEmpty()) {
+                    throw new UpstreamServiceException(
+                            "La institución no reporta periodos académicos regulares vigentes con fechas de inicio y fin válidas.");
+                }
+
+                // Si la institución no reporta isCurrent=true (vacaciones, receso intersemestral o cambio de ciclo),
+                // seleccionar el periodo lectivo más reciente por cronograma institucional real.
+                AcademicPeriodInfo latest = validSemesterPeriods.stream()
+                        .max(Comparator.comparing(AcademicPeriodInfo::endDate))
+                        .orElse(validSemesterPeriods.get(0));
+
+                log.info("[resolveAcademicPeriod] Ningún periodo activo con isCurrent=true. Seleccionando el periodo lectivo más reciente por cronograma institucional: '{}' (ID: {}, código: {})",
                         latest.name(), latest.id(), latest.code());
                 return validatePeriod(latest);
             }

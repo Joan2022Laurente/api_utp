@@ -111,6 +111,25 @@ class UtpPortalGatewayAdapterFailFastTest {
     }
 
     @Test
+    @DisplayName("resolveCurrentAcademicPeriod ignora periodo predeterminado 9999 sin fechas y selecciona el ciclo lectivo real más reciente")
+    void ignoresPermanent9999PredeterminadoAndPicksLatestSemester() {
+        String json = """
+                [
+                  {"id":"cd9740d6-172d-52d6-8884-75548942072c","code":"9999PRED000","name":"Período Predeterminado","isCurrent":false,"startDate":null,"endDate":null},
+                  {"id":"2253","code":"2025-2","name":"2025 - Ciclo 2 Agosto","isCurrent":false,"startDate":"2025-08-15","endDate":"2025-12-15"},
+                  {"id":"2263","code":"2026-2","name":"2026 - Ciclo 2 Agosto PREG","isCurrent":false,"startDate":"2026-08-15","endDate":"2026-12-13"}
+                ]
+                """;
+        UtpPortalGatewayAdapter adapter = adapterWithAcademicPeriods(200, json);
+
+        UtpPortalGatewayAdapter.AcademicPeriodInfo info = adapter.resolveCurrentAcademicPeriod(VALID_TOKEN);
+        assertNotNull(info);
+        assertEquals("2263", info.id());
+        assertEquals("2026-2", info.code());
+        assertEquals("2026 - Ciclo 2 Agosto PREG", info.name());
+    }
+
+    @Test
     @DisplayName("resolveAcademicPeriod con periodo específico existente lo resuelve exitosamente")
     void resolveSpecificExistingPeriodSuccess() {
         String json = """
