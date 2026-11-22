@@ -124,7 +124,20 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         return base + subpath;
     }
 
-    public record AcademicPeriodInfo(String id, String code, String name, boolean isCurrent, LocalDate startDate, LocalDate endDate) {
+    public record AcademicPeriodInfo(
+            String id,
+            String code,
+            String name,
+            boolean isCurrent,
+            LocalDate startDate,
+            LocalDate endDate,
+            String rawCode,
+            String acadCareer
+    ) {
+        public AcademicPeriodInfo(String id, String code, String name, boolean isCurrent, LocalDate startDate, LocalDate endDate) {
+            this(id, code, name, isCurrent, startDate, endDate, code, "");
+        }
+
         public int totalWeeks() {
             if (startDate == null || endDate == null) {
                 throw new IllegalStateException("El periodo académico '" + name + "' no cuenta con fechas de inicio y fin válidas para calcular totalWeeks.");
@@ -196,11 +209,26 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 List<AcademicPeriodInfo> parsedPeriods = new ArrayList<>();
                 for (JsonNode node : array) {
                     String id = node.path("id").asText();
-                    String code = node.path("code").asText();
+                    // UTP oficial: 'period' contiene el código canónico del ciclo (ej: "2263", "9999"), mientras 'code' es "2263PREG001"
+                    String periodVal = node.hasNonNull("period") ? node.path("period").asText().trim() : "";
+                    String rawCode = node.path("code").asText("");
+                    String code = !periodVal.isBlank() ? periodVal : rawCode;
                     String name = node.path("name").asText();
-                    boolean isCurr = node.path("isCurrent").asBoolean(false);
-                    String startStr = node.path("startDate").asText(null);
-                    String endStr = node.path("endDate").asText(null);
+                    String acadCareer = node.path("acadCareer").asText("");
+                    String type = node.path("type").asText("");
+
+                    // UTP oficial: 'type': "CURRENT_PERIOD" vs "OLD_PERIOD", o fallback booleano 'isCurrent'
+                    boolean isCurr = "CURRENT_PERIOD".equalsIgnoreCase(type)
+                            || node.path("isCurrent").asBoolean(false)
+                            || "true".equalsIgnoreCase(node.path("isCurrent").asText());
+
+                    // UTP oficial: fechas vienen como 'start' ("2026-08-10") y 'end' ("2026-12-08") o 'parsedStartDate' / 'startDate' / 'endDate'
+                    String startStr = node.hasNonNull("start") ? node.path("start").asText(null)
+                            : (node.hasNonNull("startDate") ? node.path("startDate").asText(null)
+                            : (node.hasNonNull("parsedStartDate") ? node.path("parsedStartDate").asText(null) : null));
+                    String endStr = node.hasNonNull("end") ? node.path("end").asText(null)
+                            : (node.hasNonNull("endDate") ? node.path("endDate").asText(null) : null);
+
                     LocalDate start = null;
                     LocalDate end = null;
                     try {
@@ -209,7 +237,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                         }
                     } catch (java.time.format.DateTimeParseException e) {
                         throw new UpstreamServiceException(
-                                "Fecha de inicio (startDate) del periodo '" + name + "' tiene formato ISO inválido: " + startStr, e);
+                                "Fecha de inicio del periodo '" + name + "' tiene formato ISO inválido: " + startStr, e);
                     }
                     try {
                         if (endStr != null && endStr.length() >= 10) {
@@ -217,10 +245,10 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                         }
                     } catch (java.time.format.DateTimeParseException e) {
                         throw new UpstreamServiceException(
-                                "Fecha de fin (endDate) del periodo '" + name + "' tiene formato ISO inválido: " + endStr, e);
+                                "Fecha de fin del periodo '" + name + "' tiene formato ISO inválido: " + endStr, e);
                     }
                     if (id != null && !id.isBlank()) {
-                        parsedPeriods.add(new AcademicPeriodInfo(id, code, name, isCurr, start, end));
+                        parsedPeriods.add(new AcademicPeriodInfo(id, code, name, isCurr, start, end, rawCode, acadCareer));
                     }
                 }
 
@@ -232,15 +260,16 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 boolean searchSpecific = (targetPeriodId != null && !targetPeriodId.isBlank());
                 if (searchSpecific) {
                     String targetClean = targetPeriodId.trim().toLowerCase();
-                    // 1. Coincidencia exacta por ID, código o nombre
+                    // 1. Coincidencia exacta por ID, código corto, código completo o nombre
                     for (AcademicPeriodInfo p : parsedPeriods) {
                         if (p.id().equalsIgnoreCase(targetClean)
                                 || (p.code() != null && p.code().equalsIgnoreCase(targetClean))
+                                || (p.rawCode() != null && p.rawCode().equalsIgnoreCase(targetClean))
                                 || (p.name() != null && p.name().equalsIgnoreCase(targetClean))) {
                             return validatePeriod(p);
                         }
                     }
-                    // 2. Coincidencia flexible por contención o prefijo (ej. "2026 - Ciclo 2 Agosto" coincide con "2026 - Ciclo 2 Agosto PREG")
+                    // 2. Coincidencia flexible por contención o prefijo (ej. "2026 - Ciclo 2 Agosto" coincide con "2026 - Ciclo 2 Agosto PREG (001)")
                     for (AcademicPeriodInfo p : parsedPeriods) {
                         if (p.name() != null) {
                             String pNameClean = p.name().trim().toLowerCase();
@@ -253,33 +282,45 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                             "El periodo académico solicitado '" + targetPeriodId + "' no fue reportado por la institución.");
                 }
 
-                // Sin periodo específico: buscar primero el periodo activo (isCurrent == true)
-                for (AcademicPeriodInfo p : parsedPeriods) {
-                    if (p.isCurrent()) {
-                        return validatePeriod(p);
-                    }
-                }
-
-                // Filtrar periodos académicos regulares válidos (excluyendo contenedores transversales/permanentes 9999 o sin fechas)
-                List<AcademicPeriodInfo> validSemesterPeriods = parsedPeriods.stream()
-                        .filter(p -> p.startDate() != null && p.endDate() != null)
-                        .filter(p -> (p.code() == null || !p.code().startsWith("9999"))
-                                && (p.id() == null || !p.id().startsWith("9999"))
-                                && (p.name() == null || !p.name().toLowerCase().contains("predeterminado")))
+                // Sin periodo específico: buscar periodos con isCurrent=true (CURRENT_PERIOD)
+                List<AcademicPeriodInfo> currentPeriods = parsedPeriods.stream()
+                        .filter(AcademicPeriodInfo::isCurrent)
                         .toList();
 
-                if (validSemesterPeriods.isEmpty()) {
-                    throw new UpstreamServiceException(
-                            "La institución no reporta periodos académicos regulares vigentes con fechas de inicio y fin válidas.");
+                if (!currentPeriods.isEmpty()) {
+                    // Si UTP marca como CURRENT_PERIOD tanto al ciclo lectivo regular como al contenedor transversal permanente 9999/PRED,
+                    // priorizar el ciclo lectivo académico regular (PREG / no 9999 / fechas lectivas reales)
+                    AcademicPeriodInfo activeSemester = currentPeriods.stream()
+                            .filter(p -> !"9999".equals(p.code())
+                                    && (p.code() == null || !p.code().startsWith("9999"))
+                                    && !"PRED".equalsIgnoreCase(p.acadCareer())
+                                    && (p.name() == null || !p.name().toLowerCase().contains("predeterminado"))
+                                    && (p.startDate() == null || p.startDate().getYear() > 2000))
+                            .findFirst()
+                            .orElse(currentPeriods.get(0));
+
+                    log.info("[resolveAcademicPeriod] Periodo activo resuelto desde la institución: '{}' (ID: {}, código: {}, carrera: {})",
+                            activeSemester.name(), activeSemester.id(), activeSemester.code(), activeSemester.acadCareer());
+                    return validatePeriod(activeSemester);
                 }
 
                 // Si la institución no reporta isCurrent=true (vacaciones, receso intersemestral o cambio de ciclo),
-                // seleccionar el periodo lectivo más reciente por cronograma institucional real.
-                AcademicPeriodInfo latest = validSemesterPeriods.stream()
-                        .max(Comparator.comparing(AcademicPeriodInfo::endDate))
-                        .orElse(validSemesterPeriods.get(0));
+                // seleccionar el periodo lectivo regular más reciente por cronograma institucional real.
+                List<AcademicPeriodInfo> validSemesterPeriods = parsedPeriods.stream()
+                        .filter(p -> !"9999".equals(p.code())
+                                && (p.code() == null || !p.code().startsWith("9999"))
+                                && !"PRED".equalsIgnoreCase(p.acadCareer())
+                                && (p.name() == null || !p.name().toLowerCase().contains("predeterminado"))
+                                && (p.startDate() == null || p.startDate().getYear() > 2000))
+                        .toList();
 
-                log.info("[resolveAcademicPeriod] Ningún periodo activo con isCurrent=true. Seleccionando el periodo lectivo más reciente por cronograma institucional: '{}' (ID: {}, código: {})",
+                List<AcademicPeriodInfo> candidates = validSemesterPeriods.isEmpty() ? parsedPeriods : validSemesterPeriods;
+                AcademicPeriodInfo latest = candidates.stream()
+                        .filter(p -> p.endDate() != null)
+                        .max(Comparator.comparing(AcademicPeriodInfo::endDate))
+                        .orElse(candidates.get(0));
+
+                log.info("[resolveAcademicPeriod] Ningún periodo activo con isCurrent/CURRENT_PERIOD. Seleccionando el periodo más reciente por cronograma institucional: '{}' (ID: {}, código: {})",
                         latest.name(), latest.id(), latest.code());
                 return validatePeriod(latest);
             }

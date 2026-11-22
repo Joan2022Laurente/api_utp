@@ -75,20 +75,72 @@ Obtiene el historial de periodos del alumno y el ciclo activo.
 * **Método**: `GET`
 * **Ruta**: `/course/student/{userId}/academicperiods`
 * **Parámetros**:
-  * `userId`: UUID del alumno.
-* **Respuesta típica**:
+  * `userId`: UUID del alumno (derivado determinísticamente por UUIDv5 conforme a §19).
+* **Respuesta exacta verificada en vivo (Playwright MCP contra backend PAO)**:
 ```json
-[
-  {
-    "id": 2263,
-    "code": "2026-2",
-    "name": "2026 - Ciclo 2 Agosto PREG",
-    "isCurrent": true,
-    "startDate": "2026-08-15T00:00:00.000Z",
-    "endDate": "2026-12-15T00:00:00.000Z"
+{
+  "success": true,
+  "code": 2,
+  "message": "OK",
+  "data": {
+    "academicPeriods": [
+      {
+        "id": "cd9740d6-172d-52d6-8884-75548942072c",
+        "period": "9999",
+        "acadCareer": "PRED",
+        "module": "000",
+        "name": "Período Predeterminado",
+        "active": true,
+        "start": "1900-01-01",
+        "end": "2100-12-31",
+        "sectionId": "c10d5373-728d-5f35-b1b1-502695a43a49",
+        "type": "CURRENT_PERIOD",
+        "displaySetting": null,
+        "code": "9999PRED000",
+        "tenantId": "a5f469d2-3c0e-5c68-8d32-5265923a8e40",
+        "parsedStartDate": "1900-01-01",
+        "priority": 2
+      },
+      {
+        "id": "95fdb1ee-1b96-5f61-ab7e-6149c896f891",
+        "period": "2263",
+        "acadCareer": "PREG",
+        "module": "001",
+        "name": "2026 - Ciclo 2 Agosto PREG (001)",
+        "active": true,
+        "start": "2026-08-10",
+        "end": "2026-12-08",
+        "sectionId": "4853a86a-4e82-5d4f-b14b-10ec8addcc91",
+        "type": "CURRENT_PERIOD",
+        "displaySetting": null,
+        "code": "2263PREG001",
+        "tenantId": "a5f469d2-3c0e-5c68-8d32-5265923a8e40",
+        "parsedStartDate": "2026-08-10",
+        "priority": 2
+      },
+      {
+        "id": "28586594-55ce-539b-bb26-4633bedf2f63",
+        "period": "2262",
+        "acadCareer": "PREG",
+        "module": "001",
+        "name": "2026 - Ciclo 1 Marzo PREG (001)",
+        "active": true,
+        "start": "2026-03-23",
+        "end": "2026-07-21",
+        "type": "OLD_PERIOD",
+        "code": "2262PREG001"
+      }
+    ]
   }
-]
+}
 ```
+* **Campos clave para el parser**:
+  * `data.academicPeriods`: Array contenedor en el payload raíz.
+  * `period`: Código numérico canónico de ciclo (`"2263"`, `"9999"`).
+  * `code`: Código institucional compuesto (`"2263PREG001"`, `"9999PRED000"`).
+  * `acadCareer`: `"PREG"` para pregrado regular vs `"PRED"` para el contenedor permanente.
+  * `type`: `"CURRENT_PERIOD"` denota periodo activo (pueden coexistir `PREG` y `PRED`).
+  * `start` y `end`: Fechas límite del ciclo en formato `YYYY-MM-DD` (`"2026-08-10"` a `"2026-12-08"`).
 
 ---
 

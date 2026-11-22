@@ -291,4 +291,86 @@ class UtpPortalGatewayAdapterFailFastTest {
 
         assertThrows(UpstreamServiceException.class, () -> adapter.fetchSchedule(VALID_TOKEN, "periodo-inexistente"));
     }
+
+    @Test
+    @DisplayName("resolveCurrentAcademicPeriod con contrato real de UTP PAO (type CURRENT_PERIOD, start, end, period 2263)")
+    void resolveCurrentAcademicPeriodWithLiveUtpPaoContract() {
+        String livePayload = """
+                {
+                  "success": true,
+                  "code": 2,
+                  "message": "OK",
+                  "data": {
+                    "academicPeriods": [
+                      {
+                        "id": "cd9740d6-172d-52d6-8884-75548942072c",
+                        "period": "9999",
+                        "acadCareer": "PRED",
+                        "module": "000",
+                        "name": "Período Predeterminado",
+                        "active": true,
+                        "start": "1900-01-01",
+                        "end": "2100-12-31",
+                        "sectionId": "c10d5373-728d-5f35-b1b1-502695a43a49",
+                        "type": "CURRENT_PERIOD",
+                        "displaySetting": null,
+                        "code": "9999PRED000",
+                        "tenantId": "a5f469d2-3c0e-5c68-8d32-5265923a8e40",
+                        "parsedStartDate": "1900-01-01",
+                        "priority": 2
+                      },
+                      {
+                        "id": "28586594-55ce-539b-bb26-4633bedf2f63",
+                        "period": "2262",
+                        "acadCareer": "PREG",
+                        "module": "001",
+                        "name": "2026 - Ciclo 1 Marzo PREG (001)",
+                        "active": true,
+                        "start": "2026-03-23",
+                        "end": "2026-07-21",
+                        "type": "OLD_PERIOD",
+                        "code": "2262PREG001"
+                      },
+                      {
+                        "id": "95fdb1ee-1b96-5f61-ab7e-6149c896f891",
+                        "period": "2263",
+                        "acadCareer": "PREG",
+                        "module": "001",
+                        "name": "2026 - Ciclo 2 Agosto PREG (001)",
+                        "active": true,
+                        "start": "2026-08-10",
+                        "end": "2026-12-08",
+                        "sectionId": "4853a86a-4e82-5d4f-b14b-10ec8addcc91",
+                        "type": "CURRENT_PERIOD",
+                        "displaySetting": null,
+                        "code": "2263PREG001",
+                        "tenantId": "a5f469d2-3c0e-5c68-8d32-5265923a8e40",
+                        "parsedStartDate": "2026-08-10",
+                        "priority": 2
+                      }
+                    ]
+                  }
+                }
+                """;
+        UtpPortalGatewayAdapter adapter = adapterWithAcademicPeriods(200, livePayload);
+
+        // Sin periodo específico -> debe resolver el ciclo activo real (2263), ignorando el contenedor 9999
+        UtpPortalGatewayAdapter.AcademicPeriodInfo info = adapter.resolveCurrentAcademicPeriod(VALID_TOKEN);
+        assertNotNull(info);
+        assertEquals("95fdb1ee-1b96-5f61-ab7e-6149c896f891", info.id());
+        assertEquals("2263", info.code());
+        assertEquals("2263PREG001", info.rawCode());
+        assertEquals("2026 - Ciclo 2 Agosto PREG (001)", info.name());
+        assertEquals(LocalDate.of(2026, 8, 10), info.startDate());
+        assertEquals(LocalDate.of(2026, 12, 8), info.endDate());
+        assertTrue(info.isCurrent());
+
+        // Búsqueda específica por código corto "2263"
+        UtpPortalGatewayAdapter.AcademicPeriodInfo specificByShort = adapter.resolveAcademicPeriod(VALID_TOKEN, "2263");
+        assertEquals("95fdb1ee-1b96-5f61-ab7e-6149c896f891", specificByShort.id());
+
+        // Búsqueda específica por nombre parcial
+        UtpPortalGatewayAdapter.AcademicPeriodInfo specificByName = adapter.resolveAcademicPeriod(VALID_TOKEN, "Ciclo 2 Agosto");
+        assertEquals("95fdb1ee-1b96-5f61-ab7e-6149c896f891", specificByName.id());
+    }
 }
