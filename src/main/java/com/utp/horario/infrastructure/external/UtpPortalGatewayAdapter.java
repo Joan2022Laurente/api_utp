@@ -42,6 +42,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -192,54 +193,84 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 }
             }
             if (array != null && array.isArray()) {
-                boolean searchSpecific = (targetPeriodId != null && !targetPeriodId.isBlank());
+                List<AcademicPeriodInfo> parsedPeriods = new ArrayList<>();
                 for (JsonNode node : array) {
                     String id = node.path("id").asText();
                     String code = node.path("code").asText();
                     String name = node.path("name").asText();
-                    boolean matches = searchSpecific
-                            ? (id.equals(targetPeriodId) || code.equalsIgnoreCase(targetPeriodId) || name.equalsIgnoreCase(targetPeriodId))
-                            : node.path("isCurrent").asBoolean(false);
-
-                    if (matches) {
-                        boolean isCurr = node.path("isCurrent").asBoolean(false);
-                        String startStr = node.path("startDate").asText();
-                        String endStr = node.path("endDate").asText();
-                        LocalDate start = null;
-                        LocalDate end = null;
-                        try {
-                            if (startStr != null && startStr.length() >= 10) {
-                                start = LocalDate.parse(startStr.substring(0, 10));
-                            }
-                        } catch (java.time.format.DateTimeParseException e) {
-                            throw new UpstreamServiceException(
-                                    "Fecha de inicio (startDate) del periodo '" + name + "' tiene formato ISO inválido: " + startStr, e);
+                    boolean isCurr = node.path("isCurrent").asBoolean(false);
+                    String startStr = node.path("startDate").asText(null);
+                    String endStr = node.path("endDate").asText(null);
+                    LocalDate start = null;
+                    LocalDate end = null;
+                    try {
+                        if (startStr != null && startStr.length() >= 10) {
+                            start = LocalDate.parse(startStr.substring(0, 10));
                         }
-                        try {
-                            if (endStr != null && endStr.length() >= 10) {
-                                end = LocalDate.parse(endStr.substring(0, 10));
-                            }
-                        } catch (java.time.format.DateTimeParseException e) {
-                            throw new UpstreamServiceException(
-                                    "Fecha de fin (endDate) del periodo '" + name + "' tiene formato ISO inválido: " + endStr, e);
+                    } catch (java.time.format.DateTimeParseException e) {
+                        throw new UpstreamServiceException(
+                                "Fecha de inicio (startDate) del periodo '" + name + "' tiene formato ISO inválido: " + startStr, e);
+                    }
+                    try {
+                        if (endStr != null && endStr.length() >= 10) {
+                            end = LocalDate.parse(endStr.substring(0, 10));
                         }
-                        if (start == null) {
-                            throw new UpstreamServiceException(
-                                    "El periodo académico '" + name + "' de UTP no incluye fecha de inicio (startDate) válida.");
-                        }
-                        if (end == null) {
-                            throw new UpstreamServiceException(
-                                    "El periodo académico '" + name + "' de UTP no incluye fecha de fin (endDate) válida.");
-                        }
-                        return new AcademicPeriodInfo(id, code, name, isCurr, start, end);
+                    } catch (java.time.format.DateTimeParseException e) {
+                        throw new UpstreamServiceException(
+                                "Fecha de fin (endDate) del periodo '" + name + "' tiene formato ISO inválido: " + endStr, e);
+                    }
+                    if (id != null && !id.isBlank()) {
+                        parsedPeriods.add(new AcademicPeriodInfo(id, code, name, isCurr, start, end));
                     }
                 }
+
+                if (parsedPeriods.isEmpty()) {
+                    throw new UpstreamServiceException(
+                            "La institución no reportó periodos académicos en su catálogo.");
+                }
+
+                boolean searchSpecific = (targetPeriodId != null && !targetPeriodId.isBlank());
                 if (searchSpecific) {
+                    String targetClean = targetPeriodId.trim().toLowerCase();
+                    // 1. Coincidencia exacta por ID, código o nombre
+                    for (AcademicPeriodInfo p : parsedPeriods) {
+                        if (p.id().equalsIgnoreCase(targetClean)
+                                || (p.code() != null && p.code().equalsIgnoreCase(targetClean))
+                                || (p.name() != null && p.name().equalsIgnoreCase(targetClean))) {
+                            return validatePeriod(p);
+                        }
+                    }
+                    // 2. Coincidencia flexible por contención o prefijo (ej. "2026 - Ciclo 2 Agosto" coincide con "2026 - Ciclo 2 Agosto PREG")
+                    for (AcademicPeriodInfo p : parsedPeriods) {
+                        if (p.name() != null) {
+                            String pNameClean = p.name().trim().toLowerCase();
+                            if (pNameClean.contains(targetClean) || targetClean.contains(pNameClean)) {
+                                return validatePeriod(p);
+                            }
+                        }
+                    }
                     throw new UpstreamServiceException(
                             "El periodo académico solicitado '" + targetPeriodId + "' no fue reportado por la institución.");
                 }
-                throw new UpstreamServiceException(
-                        "La institución no reporta ningún periodo académico activo (isCurrent=true).");
+
+                // Sin periodo específico: buscar primero el periodo activo (isCurrent == true)
+                for (AcademicPeriodInfo p : parsedPeriods) {
+                    if (p.isCurrent()) {
+                        return validatePeriod(p);
+                    }
+                }
+
+                // Si la institución no reporta isCurrent=true (vacaciones, receso intersemestral o cambio de ciclo),
+                // seleccionar el periodo más reciente por cronograma institucional real.
+                AcademicPeriodInfo latest = parsedPeriods.stream()
+                        .max(Comparator.comparing(
+                                (AcademicPeriodInfo p) -> p.endDate() != null ? p.endDate() : (p.startDate() != null ? p.startDate() : LocalDate.MIN)
+                        ))
+                        .orElse(parsedPeriods.get(0));
+
+                log.info("[resolveAcademicPeriod] Ningún periodo activo con isCurrent=true. Seleccionando el periodo más reciente por cronograma institucional: '{}' (ID: {}, código: {})",
+                        latest.name(), latest.id(), latest.code());
+                return validatePeriod(latest);
             }
             log.error("[resolveAcademicPeriod] Payload inesperado de periodos académicos (HTTP {}): {}",
                     resp.statusCode(), resp.body());
@@ -254,6 +285,18 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
             throw new UpstreamServiceException(
                     "Error de red al consultar periodos académicos de UTP: " + e.getMessage(), e);
         }
+    }
+
+    private AcademicPeriodInfo validatePeriod(AcademicPeriodInfo p) {
+        if (p.startDate() == null) {
+            throw new UpstreamServiceException(
+                    "El periodo académico '" + p.name() + "' de UTP no incluye fecha de inicio (startDate) válida.");
+        }
+        if (p.endDate() == null) {
+            throw new UpstreamServiceException(
+                    "El periodo académico '" + p.name() + "' de UTP no incluye fecha de fin (endDate) válida.");
+        }
+        return p;
     }
 
     /**

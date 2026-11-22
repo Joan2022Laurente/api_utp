@@ -68,8 +68,8 @@ class UtpPortalGatewayAdapterFailFastTest {
     }
 
     @Test
-    @DisplayName("resolveCurrentAcademicPeriod si ningún periodo tiene isCurrent=true lanza UpstreamServiceException")
-    void noCurrentPeriodThrowsUpstreamServiceException() {
+    @DisplayName("resolveCurrentAcademicPeriod si ningún periodo tiene isCurrent=true selecciona el periodo más reciente por cronograma")
+    void noCurrentPeriodSelectsLatestPeriod() {
         String json = """
                 [
                   {"id":"2253","code":"2025-2","name":"2025 - Ciclo 2 Agosto","isCurrent":false,"startDate":"2025-08-15","endDate":"2025-12-15"},
@@ -78,9 +78,36 @@ class UtpPortalGatewayAdapterFailFastTest {
                 """;
         UtpPortalGatewayAdapter adapter = adapterWithAcademicPeriods(200, json);
 
+        UtpPortalGatewayAdapter.AcademicPeriodInfo info = adapter.resolveCurrentAcademicPeriod(VALID_TOKEN);
+        assertNotNull(info);
+        assertEquals("2261", info.id());
+        assertEquals("2026-1", info.code());
+    }
+
+    @Test
+    @DisplayName("resolveCurrentAcademicPeriod si el catálogo está vacío lanza UpstreamServiceException")
+    void emptyPeriodsCatalogThrowsUpstreamServiceException() {
+        UtpPortalGatewayAdapter adapter = adapterWithAcademicPeriods(200, "[]");
+
         UpstreamServiceException ex = assertThrows(UpstreamServiceException.class,
                 () -> adapter.resolveCurrentAcademicPeriod(VALID_TOKEN));
-        assertTrue(ex.getMessage().contains("isCurrent=true"));
+        assertTrue(ex.getMessage().contains("no reportó periodos"));
+    }
+
+    @Test
+    @DisplayName("resolveAcademicPeriod con nombre parcial (ej. sin sufijo PREG) resuelve el periodo institucional flexiblemente")
+    void resolveAcademicPeriodFlexibleNameMatchingSuccess() {
+        String json = """
+                [
+                  {"id":"2263","code":"2026-2","name":"2026 - Ciclo 2 Agosto PREG","isCurrent":false,"startDate":"2026-08-15","endDate":"2026-12-13"}
+                ]
+                """;
+        UtpPortalGatewayAdapter adapter = adapterWithAcademicPeriods(200, json);
+
+        UtpPortalGatewayAdapter.AcademicPeriodInfo info = adapter.resolveAcademicPeriod(VALID_TOKEN, "2026 - Ciclo 2 Agosto");
+        assertNotNull(info);
+        assertEquals("2263", info.id());
+        assertEquals("2026 - Ciclo 2 Agosto PREG", info.name());
     }
 
     @Test
