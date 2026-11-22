@@ -148,6 +148,25 @@ class UtpPortalGatewayAdapterFailFastTest {
     }
 
     @Test
+    @DisplayName("resolveAcademicPeriod con payload envuelto en 'data' lo desenvuelve y resuelve exitosamente")
+    void resolveAcademicPeriodWrappedInDataSuccess() {
+        String json = """
+                {
+                  "data": [
+                    {"id":"2263","code":"2026-2","name":"2026 - Ciclo 2 Agosto","isCurrent":true,"startDate":"2026-08-15","endDate":"2026-12-13"}
+                  ]
+                }
+                """;
+        UtpPortalGatewayAdapter adapter = adapterWithAcademicPeriods(200, json);
+
+        UtpPortalGatewayAdapter.AcademicPeriodInfo info = adapter.resolveAcademicPeriod(VALID_TOKEN, "2026-2");
+        assertNotNull(info);
+        assertEquals("2263", info.id());
+        assertEquals("2026 - Ciclo 2 Agosto", info.name());
+        assertTrue(info.isCurrent());
+    }
+
+    @Test
     @DisplayName("resolveAcademicPeriod por código (ej. 2026-2) lo resuelve insensible a mayúsculas")
     void resolveAcademicPeriodByCodeSuccess() {
         String json = """

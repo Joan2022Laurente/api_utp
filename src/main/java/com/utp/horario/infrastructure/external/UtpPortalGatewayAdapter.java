@@ -182,8 +182,16 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 throw new UpstreamServiceException(
                         "Fallo upstream al consultar los periodos académicos de UTP (HTTP " + resp.statusCode() + ").");
             }
-            JsonNode array = objectMapper.readTree(resp.body());
-            if (array.isArray()) {
+            JsonNode root = objectMapper.readTree(resp.body());
+            JsonNode array = (root != null && root.hasNonNull("data")) ? root.get("data") : root;
+            if (array != null && array.isObject()) {
+                if (array.hasNonNull("academicPeriods") && array.get("academicPeriods").isArray()) {
+                    array = array.get("academicPeriods");
+                } else if (array.hasNonNull("periods") && array.get("periods").isArray()) {
+                    array = array.get("periods");
+                }
+            }
+            if (array != null && array.isArray()) {
                 boolean searchSpecific = (targetPeriodId != null && !targetPeriodId.isBlank());
                 for (JsonNode node : array) {
                     String id = node.path("id").asText();
@@ -233,8 +241,10 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 throw new UpstreamServiceException(
                         "La institución no reporta ningún periodo académico activo (isCurrent=true).");
             }
+            log.error("[resolveAcademicPeriod] Payload inesperado de periodos académicos (HTTP {}): {}",
+                    resp.statusCode(), resp.body());
             throw new UpstreamServiceException(
-                    "La respuesta de periodos académicos de UTP no es un array JSON válido.");
+                    "La respuesta de periodos académicos de UTP no es un array JSON válido: " + resp.body());
         } catch (AuthenticationException | ResourceNotFoundException | UpstreamServiceException e) {
             throw e;
         } catch (InterruptedException e) {
