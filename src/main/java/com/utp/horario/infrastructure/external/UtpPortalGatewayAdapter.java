@@ -813,11 +813,17 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
 
         String targetPeriod = (period != null && !period.isBlank()) ? period.trim() : null;
         AcademicPeriodInfo periodInfo = resolveAcademicPeriod(token, targetPeriod);
-        String currentPeriod = periodInfo.id();
-        // Ruptura 5 (Checkpoint §13): conjunto compuesto de periodos, sin filtrar por
+        // Portal GraphQL de Banner espera el código canónico de periodo (ej: "2263"), no el UUID de Canvas
+        String currentPeriod = (periodInfo.code() != null && !periodInfo.code().isBlank())
+                ? periodInfo.code()
+                : periodInfo.id();
+        // Ruptura 5 (Checkpoint §13): conjunto compuesto de periodos {periodo actual, 9999}, sin filtrar por
         // flag `active` (siempre true en Canvas) y preservando talleres 9999.
         Set<String> targetPeriods = new LinkedHashSet<>();
         targetPeriods.add(currentPeriod);
+        if (periodInfo.id() != null && !periodInfo.id().isBlank()) {
+            targetPeriods.add(periodInfo.id());
+        }
         targetPeriods.add("9999");
 
         // Checkpoint 5: un fallo del catalogo institucional (401/403/404/5xx/red) se
