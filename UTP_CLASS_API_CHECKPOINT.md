@@ -43,10 +43,12 @@ La plataforma utiliza Keycloak como Identity Provider bajo el realm `Xpedition`.
   ```
 
 ### 2.2 Claims Relevantes del JWT
-Al decodificar el `access_token` (o inspeccionar el payload base64) se obtienen los identificadores requeridos para las cabeceras de cada petición:
-* `sub` / `userId`: UUID interno en base de datos PAO (`4e535263-79a0-5890-ae33-72a7aa0629ab`).
-* `tenantId`: Identificador del tenant institucional UTP (`a5f469d2-3c0e-5c68-8d32-5265923a8e40`).
-* `user-role`: `STUDENT`.
+Al decodificar el `access_token` (payload base64 de Keycloak UTP) se obtienen los identificadores de identidad del estudiante:
+* `preferred_username` / `username`: Código oficial del estudiante (ej: `U23307609`), a partir del cual se deriva determinísticamente el `paoUserId` (UUIDv5) para la cabecera `user-id` (conforme a la §19).
+* `sub`: Identificador de sujeto en el SSO de Keycloak UTP.
+* `email`: Correo institucional del estudiante.
+
+> **Aclaración de Tenant (`x-tenant-id`)**: El identificador de tenant (`a5f469d2-3c0e-5c68-8d32-5265923a8e40`) no es un claim del JWT del alumno, sino una **constante de infraestructura institucional** de la UTP ante la plataforma PAO (§3, §19). Si en el futuro un JWT declarase el claim `tenantId`, el adaptador lo prioriza; en caso contrario, se resuelve el tenant institucional centralizado (`utp.tenant-id` / `UTP_TENANT_ID`).
 
 ---
 

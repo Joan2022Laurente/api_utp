@@ -30,8 +30,8 @@ class UtpGatewayDefensiveFallbacksTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @Test
-    @DisplayName("F1: un JWT sin claims de tenant falla en 401, sin UUID fijo suplantado")
-    void tokenWithoutTenantClaimFailsFast() throws Exception {
+    @DisplayName("F1: un JWT sin claims de tenant resuelve el tenant institucional centralizado de la UTP")
+    void tokenWithoutTenantClaimResolvesInstitutionalTenant() throws Exception {
         String token = TestTokens.build("U99999999",
                 System.currentTimeMillis() / 1000 + 3600, Map.of());
         // El helper inyecta tenantId por defecto: lo eliminamos explícitamente del payload.
@@ -47,9 +47,21 @@ class UtpGatewayDefensiveFallbacksTest {
 
         UtpPortalGatewayAdapter adapter = new UtpPortalGatewayAdapter(FakeHttpClient.always(200, "{}"));
 
-        AuthenticationException error = assertThrows(AuthenticationException.class,
-                () -> adapter.extractTenantIdFromToken(tenantLess));
-        assertTrue(error.getMessage().toLowerCase().contains("tenant"), error.getMessage());
+        String resolvedTenant = adapter.extractTenantIdFromToken(tenantLess);
+        assertEquals(UtpPortalGatewayAdapter.CANONICAL_UTP_TENANT_ID, resolvedTenant);
+    }
+
+    @Test
+    @DisplayName("F1-B: un JWT con claim de tenant explícito respeta y prioriza el valor del claim")
+    void tokenWithExplicitTenantClaimIsHonored() throws Exception {
+        String customTenant = "99999999-9999-5999-8999-999999999999";
+        String token = TestTokens.build("U99999999",
+                System.currentTimeMillis() / 1000 + 3600, Map.of("tenantId", customTenant));
+
+        UtpPortalGatewayAdapter adapter = new UtpPortalGatewayAdapter(FakeHttpClient.always(200, "{}"));
+
+        String resolvedTenant = adapter.extractTenantIdFromToken(token);
+        assertEquals(customTenant, resolvedTenant);
     }
 
     @Test

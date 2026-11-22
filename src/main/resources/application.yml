@@ -43,6 +43,8 @@ utp:
   # Endpoints de pasarelas institucionales UTP (sobreescribibles por entorno sin recompilar)
   portal-url: ${UTP_PORTAL_URL:https://api-portal.utpxpedition.com/graphql}
   pao-base-url: ${UTP_PAO_BASE_URL:https://api-pao.utpxpedition.com}
+  # Tenant institucional UTP ante la plataforma PAO (Checkpoint §3 / §19)
+  tenant-id: ${UTP_TENANT_ID:a5f469d2-3c0e-5c68-8d32-5265923a8e40}
   # Namespace UUID v5 de la plataforma UTP+Class, usado para derivar el 'paoUserId'
   # de cada alumno (uuidv5(namespace, email_en_mayusculas)), igual que hace la SPA oficial.
   # Sobrescribible si la plataforma cambia su namespace.

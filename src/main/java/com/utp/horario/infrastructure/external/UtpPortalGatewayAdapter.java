@@ -90,6 +90,25 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
     @Value("${utp.pao-base-url:https://api-pao.utpxpedition.com}")
     private String paoBaseUrl;
 
+    /**
+     * Identificador canónico del tenant institucional de la UTP en la plataforma PAO (Checkpoint §3 / §19).
+     */
+    public static final String CANONICAL_UTP_TENANT_ID = "a5f469d2-3c0e-5c68-8d32-5265923a8e40";
+
+    @Value("${utp.tenant-id:a5f469d2-3c0e-5c68-8d32-5265923a8e40}")
+    private String configuredTenantId;
+
+    public String getInstitutionalTenantId() {
+        if (configuredTenantId != null && !configuredTenantId.isBlank()) {
+            return configuredTenantId.trim();
+        }
+        String env = System.getenv("UTP_TENANT_ID");
+        if (env != null && !env.isBlank()) {
+            return env.trim();
+        }
+        return CANONICAL_UTP_TENANT_ID;
+    }
+
     private String getPortalEndpoint() {
         return (portalUrl != null && !portalUrl.isBlank()) ? portalUrl : "https://api-portal.utpxpedition.com/graphql";
     }
@@ -319,33 +338,34 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
     }
 
     /**
-     * Resuelve el tenant del token de sesión UTP. <b>Fail-fast:</b> si el JWT no declara
-     * ninguno de los claims reconocidos, se lanza {@link AuthenticationException} en vez de
-     * inyectar un UUID fijo (que suplantaría la identidad del tenant ante PAO).
+     * Resuelve el tenant institucional para las peticiones hacia la plataforma PAO (cabecera {@code x-tenant-id}).
+     *
+     * <p>Prioridad 1: Si el token JWT declara un claim explícito de tenant ("tenantId", "tenant_id",
+     * "tenant", "x-tenant-id"), se respeta y retorna dicho valor.</p>
+     * <p>Prioridad 2: En ausencia del claim en el token (comportamiento estándar del SSO Keycloak UTP
+     * para alumnos en producción), resuelve el tenant institucional centralizado de la UTP
+     * ({@link #CANONICAL_UTP_TENANT_ID}), sobreescribible mediante {@code utp.tenant-id} o la variable
+     * de entorno {@code UTP_TENANT_ID}.</p>
      */
     String extractTenantIdFromToken(String token) {
-        if (token == null || token.isBlank() || !token.contains(".")) {
-            throw new AuthenticationException("El token de sesión UTP no contiene un tenant válido.");
-        }
-        try {
-            String[] parts = token.split("\\.");
-            if (parts.length >= 2) {
-                byte[] decoded = Base64.getUrlDecoder().decode(parts[1]);
-                JsonNode payload = objectMapper.readTree(decoded);
-                for (String claim : new String[]{"tenantId", "tenant_id", "tenant", "x-tenant-id"}) {
-                    JsonNode value = payload.get(claim);
-                    if (value != null && value.isValueNode() && !value.asText().isBlank()) {
-                        return value.asText();
+        if (token != null && token.contains(".")) {
+            try {
+                String[] parts = token.split("\\.");
+                if (parts.length >= 2) {
+                    byte[] decoded = Base64.getUrlDecoder().decode(parts[1]);
+                    JsonNode payload = objectMapper.readTree(decoded);
+                    for (String claim : new String[]{"tenantId", "tenant_id", "tenant", "x-tenant-id"}) {
+                        JsonNode value = payload.get(claim);
+                        if (value != null && value.isValueNode() && !value.asText().isBlank()) {
+                            return value.asText().trim();
+                        }
                     }
                 }
+            } catch (Exception ignored) {
+                // Token payload no parseable para claims de tenant; fallback al tenant institucional configurado.
             }
-        } catch (AuthenticationException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new AuthenticationException("No fue posible leer el tenant del token de sesión UTP.", e);
         }
-        throw new AuthenticationException(
-                "El token de sesión UTP no declara tenant (se requiere tenantId, tenant_id, tenant o x-tenant-id).");
+        return getInstitutionalTenantId();
     }
 
     @Override
