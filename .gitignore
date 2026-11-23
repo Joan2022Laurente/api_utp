@@ -20,6 +20,7 @@ laboratorio/
 *.har
 .env
 .env.*
+openrouter_fleet_keys.json
 __pycache__/
 *.pyc
 

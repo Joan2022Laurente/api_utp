@@ -6,6 +6,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -113,5 +114,15 @@ class SessionTokenInspectorTest {
         assertEquals("U99999999", a.studentCode());
         assertEquals("U21200000", b.studentCode());
         assertFalse(a.studentCode().equals(b.studentCode()));
+    }
+
+    @Test
+    @DisplayName("Un token sin studentCode ni userId lanza AuthenticationException (cero identidades inventadas)")
+    void tokenWithoutIdentityThrowsAuthenticationException() {
+        String tokenWithoutIdentity = TestTokens.build("", Instant.now().plusSeconds(3600).getEpochSecond(), Map.of("sub", "", "preferred_username", ""));
+
+        AuthenticationException ex = assertThrows(AuthenticationException.class,
+                () -> SessionTokenInspector.inspect(tokenWithoutIdentity));
+        assertTrue(ex.getMessage().contains("identificador de estudiante válido"), ex.getMessage());
     }
 }

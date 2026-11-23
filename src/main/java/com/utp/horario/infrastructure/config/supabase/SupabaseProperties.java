@@ -34,9 +34,7 @@ public class SupabaseProperties {
 
     private void loadKeyFromLocalEnvFiles() {
         List<Path> candidatePaths = List.of(
-                Paths.get(".env"),
-                Paths.get("laboratorio/.env"),
-                Paths.get("../agentic-suite-hub/.env.local")
+                Paths.get(".env")
         );
 
         for (Path path : candidatePaths) {

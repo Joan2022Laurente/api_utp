@@ -151,7 +151,10 @@ public final class SessionTokenInspector {
 
         String userId = text(payload, "userId", "user_id", "paoUserId", "sub");
         if (userId == null || userId.isBlank()) {
-            userId = studentCode.isBlank() ? "usr-student" : studentCode;
+            userId = studentCode;
+        }
+        if (studentCode.isBlank() && (userId == null || userId.isBlank())) {
+            throw new AuthenticationException("El token de sesión no contiene un identificador de estudiante válido.");
         }
 
         String fullName = text(payload, "name", "full_name");
@@ -169,7 +172,7 @@ public final class SessionTokenInspector {
 
         String career = text(payload, "career", "carrera");
         String campus = text(payload, "campus", "campusDesc", "sede");
-        int cycle = readInt(payload, "cycle", "ciclo", 1);
+        int cycle = readInt(payload, "cycle", "ciclo", 0);
 
         return new SessionClaims(studentCode, userId, fullName, email, career, campus, cycle,
                 exp != null ? Instant.ofEpochSecond(exp) : null);

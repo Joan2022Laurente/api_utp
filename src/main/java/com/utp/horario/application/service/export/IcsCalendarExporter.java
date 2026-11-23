@@ -5,6 +5,7 @@ import com.utp.horario.domain.model.ScheduleInterval;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -55,7 +56,7 @@ public class IcsCalendarExporter {
 
                 String uid = (session.getId() != null && !session.getId().isBlank())
                         ? session.getId() + "-" + start.format(ICS_DATE_TIME) + "@utp.edu.pe"
-                        : UUID.randomUUID().toString() + "@utp.edu.pe";
+                        : UUID.nameUUIDFromBytes(((session.getCourseCode() != null ? session.getCourseCode() : "UTP") + "-" + start.format(ICS_DATE_TIME)).getBytes(StandardCharsets.UTF_8)).toString() + "@utp.edu.pe";
 
                 String summary = (session.getCourseName() != null ? session.getCourseName() : "Clase UTP");
                 if (session.getCourseCode() != null && !session.getCourseCode().isBlank()) {

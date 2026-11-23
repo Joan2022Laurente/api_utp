@@ -28,14 +28,17 @@ public class ScheduleController {
     @GetMapping
     public ResponseEntity<ApiResponse<ScheduleInterval>> getSchedule(
             @org.springframework.web.bind.annotation.RequestHeader(value = "Authorization", required = false) String authHeader,
-            @io.swagger.v3.oas.annotations.Parameter(description = "Identificador opcional del estudiante (en peticiones con token se deriva del JWT)", example = "current-student")
+            @io.swagger.v3.oas.annotations.Parameter(description = "Identificador opcional del estudiante (en peticiones con token se deriva del JWT)")
             @RequestParam(required = false) String studentId,
             @RequestParam(required = false) String period) {
         String token = SessionTokenInspector.extractBearerToken(authHeader);
         if (token == null) {
             return ResponseEntity.status(401).body(ApiResponse.fail("Se requiere token de sesión institucional UTP con formato 'Bearer <token>'"));
         }
-        String effectiveStudentId = (studentId != null && !studentId.isBlank()) ? studentId : "current-student";
+        SessionTokenInspector.SessionClaims claims = SessionTokenInspector.inspect(token);
+        String effectiveStudentId = (studentId != null && !studentId.isBlank())
+                ? studentId
+                : (!claims.studentCode().isBlank() ? claims.studentCode() : claims.userId());
         ScheduleInterval schedule = scheduleServicePort.getStudentSchedule(effectiveStudentId, period != null ? period : "", token);
         return ResponseEntity.ok(ApiResponse.ok(schedule));
     }
@@ -62,7 +65,7 @@ public class ScheduleController {
     @GetMapping(value = "/export.ics", produces = "text/calendar; charset=utf-8")
     public ResponseEntity<Object> exportScheduleIcs(
             @org.springframework.web.bind.annotation.RequestHeader(value = "Authorization", required = false) String authHeader,
-            @io.swagger.v3.oas.annotations.Parameter(description = "Identificador opcional del estudiante (en peticiones con token se deriva del JWT)", example = "current-student")
+            @io.swagger.v3.oas.annotations.Parameter(description = "Identificador opcional del estudiante (en peticiones con token se deriva del JWT)")
             @RequestParam(required = false) String studentId,
             @RequestParam(required = false) String period) {
         String token = SessionTokenInspector.extractBearerToken(authHeader);
@@ -71,7 +74,10 @@ public class ScheduleController {
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(ApiResponse.fail("Se requiere token de sesión institucional UTP con formato 'Bearer <token>'"));
         }
-        String effectiveStudentId = (studentId != null && !studentId.isBlank()) ? studentId : "current-student";
+        SessionTokenInspector.SessionClaims claims = SessionTokenInspector.inspect(token);
+        String effectiveStudentId = (studentId != null && !studentId.isBlank())
+                ? studentId
+                : (!claims.studentCode().isBlank() ? claims.studentCode() : claims.userId());
         String icsContent = scheduleServicePort.exportScheduleToIcs(effectiveStudentId, period != null ? period : "", token);
         return ResponseEntity.ok()
                 .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"horario_utp.ics\"")

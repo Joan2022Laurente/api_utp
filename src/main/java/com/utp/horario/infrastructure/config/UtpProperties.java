@@ -29,9 +29,4 @@ public class UtpProperties {
      * Namespace UUID v5 para derivación de paoUserId.
      */
     private String paoUuidNamespace = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
-
-    /**
-     * Mapeo estático de fallback paoUserId por código de alumno.
-     */
-    private String paoUserMap = "";
 }

@@ -58,4 +58,32 @@ class IcsCalendarExporterTest {
         assertTrue(ics.contains("END:VEVENT"));
         assertTrue(ics.contains("END:VCALENDAR"));
     }
+
+    @Test
+    @DisplayName("Sesión sin ID oficial genera UID determinista basado en curso y fecha/hora (RFC 5545)")
+    void testDeterministicUidWhenSessionIdIsNull() {
+        LocalDateTime start = LocalDateTime.of(2026, 8, 10, 14, 30);
+        ClassSession session = ClassSession.builder()
+                .id(null)
+                .courseCode("100000SI97")
+                .courseName("SERVICIOS CLOUD")
+                .startAt(start)
+                .finishAt(start.plusHours(2))
+                .build();
+
+        ScheduleInterval schedule = ScheduleInterval.builder()
+                .id("sched-1")
+                .classes(List.of(session))
+                .build();
+
+        String ics1 = exporter.exportSchedule(schedule);
+        String ics2 = exporter.exportSchedule(schedule);
+
+        String uid1 = ics1.lines().filter(l -> l.startsWith("UID:")).findFirst().orElse("");
+        String uid2 = ics2.lines().filter(l -> l.startsWith("UID:")).findFirst().orElse("");
+
+        assertFalse(uid1.isBlank());
+        assertEquals(uid1, uid2, "El UID debe ser determinista para evitar eventos duplicados");
+        assertTrue(uid1.endsWith("@utp.edu.pe"));
+    }
 }

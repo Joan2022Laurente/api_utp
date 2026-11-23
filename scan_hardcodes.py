@@ -190,7 +190,7 @@ AUDIT_CHECKS = [
         "severity": "ALTO",
         "title": "Inyección de identificador dummy 'usr-student'",
         "desc": "Si studentUserId está vacío, se inyecta 'usr-student' como usuario simulado.",
-        "file_pattern": r"UtpPortalGatewayAdapter\.java$",
+        "file_pattern": r".*\.java$",
         "match_fn": lambda line, fname: (
             '"usr-student"' in line
         )

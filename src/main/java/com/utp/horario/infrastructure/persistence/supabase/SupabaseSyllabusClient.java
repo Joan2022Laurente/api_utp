@@ -505,10 +505,10 @@ public class SupabaseSyllabusClient {
         String courseId = row.path("course_id").asText("");
         String courseCode = row.path("course_code").asText(courseId);
         String courseName = row.path("course_name").asText("");
-        int credits = row.path("credits").asInt(3);
-        String hoursStr = row.path("hours").asText("4h").replaceAll("[^0-9]", "");
-        Integer weeklyHours = hoursStr.isEmpty() ? 4 : Integer.parseInt(hoursStr);
-        String modality = row.path("modality").asText("Presencial");
+        int credits = row.path("credits").asInt(0);
+        String hoursStr = row.path("hours").asText("").replaceAll("[^0-9]", "");
+        Integer weeklyHours = hoursStr.isEmpty() ? null : Integer.parseInt(hoursStr);
+        String modality = row.hasNonNull("modality") ? row.path("modality").asText() : null;
         String formula = row.path("formula").asText("");
         String learningGoal = row.path("learning_goal").asText("");
 
@@ -517,7 +517,7 @@ public class SupabaseSyllabusClient {
         JsonNode scheduleNode = row.path("weekly_schedule");
         if (scheduleNode.isArray()) {
             for (JsonNode sn : scheduleNode) {
-                int week = sn.path("week").asInt(1);
+                int week = sn.path("week").asInt(0);
                 String unit = sn.path("unit").asText("");
                 String activities = sn.path("activities").asText("");
                 String eval = sn.hasNonNull("evaluation") ? sn.path("evaluation").asText() : null;
@@ -555,7 +555,7 @@ public class SupabaseSyllabusClient {
                 String desc = en.path("description").asText("");
                 int week = en.path("week").asInt(0);
                 int weight = en.path("weightPercent").asInt(0);
-                String mod = en.path("modality").asText("Individual");
+                String mod = en.hasNonNull("modality") ? en.path("modality").asText() : null;
                 String obs = en.path("observation").asText("");
 
                 evaluations.add(SyllabusEvaluation.builder()

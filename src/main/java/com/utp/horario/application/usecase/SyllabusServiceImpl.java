@@ -337,7 +337,7 @@ public class SyllabusServiceImpl implements SyllabusServicePort {
                         .week(deterministic != null ? deterministic.getWeek() : null)
                         .weightPercent(weight)
                         .modality(deterministic != null && deterministic.getModality() != null
-                                ? deterministic.getModality() : "Individual")
+                                ? deterministic.getModality() : null)
                         .observation(deterministic != null ? deterministic.getObservation() : "")
                         .build());
             }

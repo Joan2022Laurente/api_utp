@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 
 # ───────────── 1. Configuración de Rutas ─────────────
-BASE_PROJECT = Path(r"c:\Program Files (x86)\Traslado\escritorio\AUTODIDACTA\Proyectos\Proyecto Horario AI universidad\api-externa-utp")
+BASE_PROJECT = Path(__file__).resolve().parent
 JAVA_ROOT = BASE_PROJECT / "src" / "main" / "java"
 RESOURCES_ROOT = BASE_PROJECT / "src" / "main" / "resources"
 OUTPUT_MD = BASE_PROJECT / "INVENTARIO_ENDPOINTS_CODIGO_REAL.md"

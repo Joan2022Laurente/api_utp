@@ -1588,15 +1588,15 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                                 String topicId = tNode.hasNonNull("id") ? tNode.get("id").asText()
                                         : (tNode.hasNonNull("topicId") ? tNode.get("topicId").asText(null) : null);
                                 String topicName = tNode.hasNonNull("name") ? tNode.get("name").asText()
-                                        : (tNode.hasNonNull("title") ? tNode.get("title").asText("Tema") : "Tema");
+                                        : (tNode.hasNonNull("title") ? tNode.get("title").asText(null) : null);
 
                                 List<SectionMaterial> materials = new ArrayList<>();
                                 if (tNode.has("materials") && tNode.get("materials").isArray()) {
                                     for (JsonNode mNode : tNode.get("materials")) {
                                         materials.add(SectionMaterial.builder()
                                                 .id(mNode.hasNonNull("id") ? mNode.get("id").asText() : mNode.path("materialId").asText(null))
-                                                .title(mNode.path("title").asText(mNode.path("name").asText("Material")))
-                                                .type(mNode.path("type").asText("DOCUMENT"))
+                                                .title(mNode.hasNonNull("title") ? mNode.path("title").asText() : (mNode.hasNonNull("name") ? mNode.path("name").asText(null) : null))
+                                                .type(mNode.hasNonNull("type") ? mNode.path("type").asText() : null)
                                                 .url(mNode.path("url").asText(null))
                                                 .viewed(mNode.hasNonNull("viewed") ? mNode.get("viewed").asBoolean() : null)
                                                 .build());
@@ -1605,7 +1605,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                                     materials.add(SectionMaterial.builder()
                                             .id(topicId)
                                             .title(topicName)
-                                            .type(tNode.path("type").asText("DOCUMENT"))
+                                            .type(tNode.hasNonNull("type") ? tNode.path("type").asText() : null)
                                             .url(tNode.path("url").asText(null))
                                             .viewed(tNode.hasNonNull("viewed") ? tNode.get("viewed").asBoolean() : null)
                                             .build());
@@ -1742,8 +1742,8 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
 
                             rubricCriterions.add(RubricCriterion.builder()
                                     .id(cNode.path("id").asText(null))
-                                    .name(cNode.path("name").asText("Criterio general"))
-                                    .score(cNode.path("score").asDouble(0.0))
+                                    .name(cNode.hasNonNull("name") ? cNode.path("name").asText() : null)
+                                    .score(cNode.hasNonNull("score") ? cNode.path("score").asDouble() : 0.0)
                                     .description(desc)
                                     .order(cNode.path("order").asInt(0))
                                     .performanceRatings(levels)
@@ -1766,7 +1766,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                     for (JsonNode f : data.path("files")) {
                         attachments.add(TaskAttachment.builder()
                                 .id(f.path("id").asText(null))
-                                .name(f.path("name").asText(f.path("filename").asText("Adjunto")))
+                                .name(f.hasNonNull("name") ? f.path("name").asText() : (f.hasNonNull("filename") ? f.path("filename").asText(null) : null))
                                 .url(f.path("url").asText(null))
                                 .type(f.path("type").asText(null))
                                 .size(f.hasNonNull("size") ? f.path("size").asLong() : null)
@@ -1792,8 +1792,8 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                         .lockAt(data.path("availableUntil").asText(null))
                         .evaluationSystem(data.path("evaluationSystem").asText(null))
                         .isGroup(data.path("isGroup").asBoolean(false))
-                        .homeworkStatus(data.path("homeworkStatus").asText("PENDING"))
-                        .evaluationTopScore(data.path("evaluationTopScore").asDouble(20.0))
+                        .homeworkStatus(data.hasNonNull("homeworkStatus") ? data.path("homeworkStatus").asText() : null)
+                        .evaluationTopScore(data.hasNonNull("evaluationTopScore") ? data.path("evaluationTopScore").asDouble() : null)
                         .rubricName(rubricName)
                         .rubricScore(rubricScore)
                         .gradingRubric(rubricCriterions)
@@ -1864,7 +1864,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                     for (JsonNode ev : eventsNode) {
                         JsonNode meta = ev.path("metadata");
                         String title = ev.path("title").asText("");
-                        String type = meta.path("activityType").asText(ev.path("type").asText("ACTIVITY"));
+                        String type = meta.hasNonNull("activityType") ? meta.path("activityType").asText() : (ev.hasNonNull("type") ? ev.path("type").asText(null) : null);
                         String finishAt = ev.path("finishAt").asText(null);
                         String evalSystem = meta.path("evaluationSystem").asText(null);
                         boolean isQualified = meta.path("isQualified").asBoolean(false);
@@ -1890,7 +1890,7 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                                 .contentId(meta.path("contentId").asText(null))
                                 .activityId(meta.path("activityId").asText(null))
                                 .evaluationSystem(evalSystem)
-                                .studentStatus(meta.path("studentStatus").asText("PENDING"))
+                                .studentStatus(meta.hasNonNull("studentStatus") ? meta.path("studentStatus").asText() : null)
                                 .isQualified(isQualified)
                                 .classificationCategory(category)
                                 .urgency(urgencyInfo.urgency())

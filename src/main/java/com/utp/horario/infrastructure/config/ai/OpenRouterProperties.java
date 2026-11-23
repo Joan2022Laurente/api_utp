@@ -52,7 +52,6 @@ public class OpenRouterProperties {
 
         // 2. Check unversioned local fleet keys file
         List<Path> candidateFiles = List.of(
-                Paths.get("laboratorio/openrouter_fleet_keys.json"),
                 Paths.get("openrouter_fleet_keys.json")
         );
 

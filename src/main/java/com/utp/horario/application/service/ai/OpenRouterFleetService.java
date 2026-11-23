@@ -77,7 +77,7 @@ public class OpenRouterFleetService {
                   "description": "Práctica Calificada 1",
                   "week": 4,
                   "weightPercent": 20,
-                  "modality": "Individual",
+                  "modality": null,
                   "observation": ""
                 }
               ],
@@ -232,9 +232,9 @@ public class OpenRouterFleetService {
             JsonNode root = objectMapper.readTree(cleanJson);
             String courseCode = root.path("courseCode").asText(fallbackCourseCode);
             String courseName = root.path("courseName").asText("");
-            int credits = root.path("credits").asInt(3);
-            String modality = root.path("modality").asText("Presencial");
-            int weeklyHours = root.path("weeklyHours").asInt(4);
+            int credits = root.path("credits").asInt(0);
+            String modality = root.hasNonNull("modality") ? root.path("modality").asText() : null;
+            int weeklyHours = root.path("weeklyHours").asInt(0);
             String formula = root.path("formula").asText("");
             String learningGoal = root.path("learningGoal").asText("");
 
@@ -247,7 +247,7 @@ public class OpenRouterFleetService {
                     String desc = en.path("description").asText("");
                     int week = en.path("week").asInt(0);
                     int weight = en.path("weightPercent").asInt(0);
-                    String mod = en.path("modality").asText("Individual");
+                    String mod = en.hasNonNull("modality") ? en.path("modality").asText() : null;
                     String obs = en.path("observation").asText("");
 
                     evaluations.add(SyllabusEvaluation.builder()
@@ -266,7 +266,7 @@ public class OpenRouterFleetService {
             JsonNode schedNode = root.path("weeklySchedule");
             if (schedNode.isArray()) {
                 for (JsonNode sn : schedNode) {
-                    int week = sn.path("week").asInt(1);
+                    int week = sn.path("week").asInt(0);
                     String unit = sn.path("unit").asText("");
                     String topic = sn.path("topic").asText("");
                     String activities = sn.path("activities").asText("");
