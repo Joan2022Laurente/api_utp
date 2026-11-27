@@ -27,6 +27,7 @@ public interface UtpPortalGatewayPort {
     com.utp.horario.domain.model.SectionCurriculumTree fetchSectionCurriculum(String sectionId, String token);
 
     List<AcademicActivity> fetchCalendarActivities(String dateToQuery, String intervalMode, String token);
+    List<AcademicActivity> fetchPendingActivitiesResume(String token);
     CourseSummaryData fetchCourseSummary(String periodId, String token);
 
     /**

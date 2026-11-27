@@ -16,6 +16,7 @@ public class TaskSpecification {
     private String title;
     private String courseCode; // Código oficial rector UTP (ej. 100000S72V)
     private String sectionId;  // UUID de la sección en Class UTP
+    private Integer weekNumber; // Semana en UTP+ Class donde está alojada la tarea
     private String descriptionMarkdown;
     private String deliverablesMarkdown;
     private Integer maxAttempts;

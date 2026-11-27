@@ -1468,6 +1468,33 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         }
     }
 
+    private DashboardCourseRef resolveCourseRefForSection(String sectionOrCourseKey, String token) {
+        if (sectionOrCourseKey == null || sectionOrCourseKey.isBlank() || token == null || token.isBlank()) {
+            return null;
+        }
+        String key = sectionOrCourseKey.trim();
+        try {
+            List<DashboardCourseRef> refs = loadDashboardCourses(token);
+            for (DashboardCourseRef ref : refs) {
+                if (key.equalsIgnoreCase(ref.sectionId())
+                        || (ref.classNumber() != null && key.equalsIgnoreCase(ref.classNumber().trim()))
+                        || (ref.sectionCode() != null && key.equalsIgnoreCase(ref.sectionCode().trim()))) {
+                    return ref;
+                }
+            }
+            for (DashboardCourseRef ref : refs) {
+                if ((ref.courseCode() != null && key.equalsIgnoreCase(ref.courseCode().trim()))
+                        || (ref.courseId() != null && key.equalsIgnoreCase(ref.courseId().trim()))) {
+                    return ref;
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[UtpPortalGatewayAdapter] No se pudo resolver courseId/sectionId en dashboard-courses para [{}]: {}",
+                    key, e.getMessage());
+        }
+        return null;
+    }
+
     @Override
     public JsonNode fetchSectionFull(String sectionId, String token) {
         if (sectionId == null || sectionId.isBlank()) {
@@ -1479,8 +1506,21 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         }
         String userId = extractUserIdFromToken(effectiveToken);
         String tenantId = extractTenantIdFromToken(effectiveToken);
-        String url = getPaoEndpoint("/course/student/sections/"
-                + URLEncoder.encode(sectionId.trim(), StandardCharsets.UTF_8) + "/full");
+
+        DashboardCourseRef courseRef = resolveCourseRefForSection(sectionId, effectiveToken);
+        String effectiveSectionId = (courseRef != null && courseRef.sectionId() != null && !courseRef.sectionId().isBlank())
+                ? courseRef.sectionId().trim()
+                : sectionId.trim();
+        String courseId = (courseRef != null && courseRef.courseId() != null && !courseRef.courseId().isBlank())
+                ? courseRef.courseId().trim()
+                : null;
+
+        // UTP+ Class PAO requiere /course/student/courses/{courseId}/sections/{sectionId}/full
+        String path = (courseId != null)
+                ? "/course/student/courses/" + URLEncoder.encode(courseId, StandardCharsets.UTF_8)
+                        + "/sections/" + URLEncoder.encode(effectiveSectionId, StandardCharsets.UTF_8) + "/full"
+                : "/course/student/sections/" + URLEncoder.encode(effectiveSectionId, StandardCharsets.UTF_8) + "/full";
+        String url = getPaoEndpoint(path);
         log.info("[UtpPortalGatewayAdapter] Consultando árbol completo de la sección en: {}", url);
 
         try {
@@ -1504,29 +1544,29 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
             if (status == 200) {
                 JsonNode root = objectMapper.readTree(resp.body());
                 if (root == null || root.isNull()) {
-                    throw new UpstreamServiceException("UTP PAO devolvió un cuerpo vacío al consultar la sección " + sectionId + ".");
+                    throw new UpstreamServiceException("UTP PAO devolvió un cuerpo vacío al consultar la sección " + effectiveSectionId + ".");
                 }
                 if (root.has("errors")) {
-                    throw new UpstreamServiceException("UTP PAO devolvió errores al consultar la sección " + sectionId + ".");
+                    throw new UpstreamServiceException("UTP PAO devolvió errores al consultar la sección " + effectiveSectionId + ".");
                 }
                 return root.hasNonNull("data") ? root.get("data") : root;
             }
             if (status == 401 || status == 403) {
-                throw new AuthenticationException("Token institucional UTP inválido o expirado para consultar sección " + sectionId);
+                throw new AuthenticationException("Token institucional UTP inválido o expirado para consultar sección " + effectiveSectionId);
             }
             if (status == 404) {
-                throw new ResourceNotFoundException("Sección académica " + sectionId + " no encontrada en UTP+ Class.");
+                throw new ResourceNotFoundException("Sección académica " + effectiveSectionId + " no encontrada en UTP+ Class.");
             }
-            throw new UpstreamServiceException("UTP PAO respondió con código " + status + " al consultar sección " + sectionId);
+            throw new UpstreamServiceException("UTP PAO respondió con código " + status + " al consultar sección " + effectiveSectionId);
         } catch (AuthenticationException | ResourceNotFoundException | UpstreamServiceException e) {
             throw e;
         } catch (IOException e) {
-            throw new UpstreamServiceException("Error de red al consultar la sección " + sectionId + ": " + e.getMessage(), e);
+            throw new UpstreamServiceException("Error de red al consultar la sección " + effectiveSectionId + ": " + e.getMessage(), e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new UpstreamServiceException("Llamada interrumpida al consultar la sección " + sectionId + ".", e);
+            throw new UpstreamServiceException("Llamada interrumpida al consultar la sección " + effectiveSectionId + ".", e);
         } catch (Exception e) {
-            throw new UpstreamServiceException("Error al procesar el árbol de la sección " + sectionId + ": " + e.getMessage(), e);
+            throw new UpstreamServiceException("Error al procesar el árbol de la sección " + effectiveSectionId + ": " + e.getMessage(), e);
         }
     }
 
@@ -1534,7 +1574,8 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
     public SectionCurriculumTree fetchSectionCurriculum(String sectionId, String token) {
         String effectiveToken = (token != null && token.startsWith("Bearer ")) ? token.substring(7).trim() : token;
         JsonNode root = fetchSectionFull(sectionId, effectiveToken);
-        return parseSectionTree(sectionId, effectiveToken, root);
+        String canonicalSectionId = root.hasNonNull("sectionId") ? root.get("sectionId").asText(sectionId) : sectionId;
+        return parseSectionTree(canonicalSectionId, effectiveToken, root);
     }
 
     public SectionCurriculumTree parseSectionTree(String sectionId, String token, JsonNode node) {
@@ -1562,71 +1603,62 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 String unitTitle = uNode.hasNonNull("title") ? uNode.get("title").asText()
                         : (uNode.hasNonNull("name") ? uNode.get("name").asText("Unidad " + unitNum) : "Unidad " + unitNum);
 
-                JsonNode weeksArray = null;
-                if (uNode.has("weeks") && uNode.get("weeks").isArray()) {
-                    weeksArray = uNode.get("weeks");
-                } else if (uNode.has("themes") && uNode.get("themes").isArray()) {
-                    weeksArray = uNode.get("themes");
-                }
+                boolean hasCanonicalWeeks = uNode.has("weeks") && uNode.get("weeks").isArray();
+                JsonNode weeksArray = hasCanonicalWeeks
+                        ? uNode.get("weeks")
+                        : (uNode.has("themes") && uNode.get("themes").isArray() ? uNode.get("themes") : null);
 
                 List<SectionWeek> weeks = new ArrayList<>();
                 if (weeksArray != null) {
-                    int weekIdx = 1;
-                    for (JsonNode wNode : weeksArray) {
-                        int weekNum = wNode.hasNonNull("weekNumber") ? wNode.get("weekNumber").asInt()
-                                : (wNode.hasNonNull("number") ? wNode.get("number").asInt() : weekIdx++);
-                        String weekName = wNode.hasNonNull("name") ? wNode.get("name").asText()
-                                : (wNode.hasNonNull("title") ? wNode.get("title").asText("Semana " + weekNum) : "Semana " + weekNum);
-
-                        JsonNode topicsArray = null;
-                        if (wNode.has("topics") && wNode.get("topics").isArray()) {
-                            topicsArray = wNode.get("topics");
-                        } else if (wNode.has("contents") && wNode.get("contents").isArray()) {
-                            topicsArray = wNode.get("contents");
+                    if (hasCanonicalWeeks) {
+                        int weekIdx = 1;
+                        for (JsonNode wNode : weeksArray) {
+                            int weekNum = wNode.hasNonNull("weekNumber") ? wNode.get("weekNumber").asInt()
+                                    : (wNode.hasNonNull("number") ? wNode.get("number").asInt() : weekIdx++);
+                            String weekName = wNode.hasNonNull("name") ? wNode.get("name").asText()
+                                    : (wNode.hasNonNull("title") ? wNode.get("title").asText("Semana " + weekNum) : "Semana " + weekNum);
+                            List<SectionTopic> topics = extractTopicsFromWeekNode(wNode);
+                            weeks.add(SectionWeek.builder()
+                                    .weekNumber(weekNum)
+                                    .name(weekName)
+                                    .topics(topics)
+                                    .build());
                         }
+                    } else {
+                        // PAO devuelve múltiples themes[] etiquetados con el mismo weekNumber.
+                        // Se agrupan bajo una única SectionWeek por semana lectiva.
+                        Map<Integer, List<SectionTopic>> topicsByWeek = new LinkedHashMap<>();
+                        int fallbackWeekIdx = 1;
+                        for (JsonNode themeNode : weeksArray) {
+                            int weekNum = themeNode.hasNonNull("weekNumber") ? themeNode.get("weekNumber").asInt()
+                                    : (themeNode.hasNonNull("number") ? themeNode.get("number").asInt() : fallbackWeekIdx++);
+                            String themeId = firstNonBlankText(themeNode, "themeId", "id", "topicId");
+                            String themeName = firstNonBlankText(themeNode, "name", "title");
 
-                        List<SectionTopic> topics = new ArrayList<>();
-                        if (topicsArray != null) {
-                            for (JsonNode tNode : topicsArray) {
-                                String topicId = tNode.hasNonNull("id") ? tNode.get("id").asText()
-                                        : (tNode.hasNonNull("topicId") ? tNode.get("topicId").asText(null) : null);
-                                String topicName = tNode.hasNonNull("name") ? tNode.get("name").asText()
-                                        : (tNode.hasNonNull("title") ? tNode.get("title").asText(null) : null);
-
-                                List<SectionMaterial> materials = new ArrayList<>();
-                                if (tNode.has("materials") && tNode.get("materials").isArray()) {
-                                    for (JsonNode mNode : tNode.get("materials")) {
-                                        materials.add(SectionMaterial.builder()
-                                                .id(mNode.hasNonNull("id") ? mNode.get("id").asText() : mNode.path("materialId").asText(null))
-                                                .title(mNode.hasNonNull("title") ? mNode.path("title").asText() : (mNode.hasNonNull("name") ? mNode.path("name").asText(null) : null))
-                                                .type(mNode.hasNonNull("type") ? mNode.path("type").asText() : null)
-                                                .url(mNode.path("url").asText(null))
-                                                .viewed(mNode.hasNonNull("viewed") ? mNode.get("viewed").asBoolean() : null)
-                                                .build());
-                                    }
-                                } else if (tNode.has("url") && !tNode.path("url").asText("").isBlank()) {
-                                    materials.add(SectionMaterial.builder()
-                                            .id(topicId)
-                                            .title(topicName)
-                                            .type(tNode.hasNonNull("type") ? tNode.path("type").asText() : null)
-                                            .url(tNode.path("url").asText(null))
-                                            .viewed(tNode.hasNonNull("viewed") ? tNode.get("viewed").asBoolean() : null)
-                                            .build());
+                            List<SectionMaterial> themeMaterials = new ArrayList<>();
+                            JsonNode contentsArray = themeNode.has("contents") && themeNode.get("contents").isArray()
+                                    ? themeNode.get("contents")
+                                    : (themeNode.has("topics") && themeNode.get("topics").isArray() ? themeNode.get("topics") : null);
+                            if (contentsArray != null) {
+                                for (JsonNode cNode : contentsArray) {
+                                    collectMaterialsFromContentNode(cNode, themeMaterials);
                                 }
+                            }
 
-                                topics.add(SectionTopic.builder()
-                                        .id(topicId)
-                                        .name(topicName)
-                                        .materials(materials)
+                            List<SectionTopic> weekTopics = topicsByWeek.computeIfAbsent(weekNum, k -> new ArrayList<>());
+                            if (themeName != null || !themeMaterials.isEmpty()) {
+                                weekTopics.add(SectionTopic.builder()
+                                        .id(themeId)
+                                        .name(themeName != null ? themeName.trim() : "Tema de clase")
+                                        .materials(themeMaterials)
                                         .build());
                             }
                         }
-
-                        weeks.add(SectionWeek.builder()
+                        topicsByWeek.forEach((weekNum, topics) -> weeks.add(SectionWeek.builder()
                                 .weekNumber(weekNum)
-                                .name(weekName)
+                                .name("Semana " + weekNum)
                                 .topics(topics)
-                                .build());
+                                .build()));
                     }
                 }
 
@@ -1650,6 +1682,113 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 .currentWeek(currentWeek)
                 .units(units)
                 .build();
+    }
+
+    private List<SectionTopic> extractTopicsFromWeekNode(JsonNode wNode) {
+        JsonNode topicsArray = null;
+        if (wNode.has("topics") && wNode.get("topics").isArray()) {
+            topicsArray = wNode.get("topics");
+        } else if (wNode.has("contents") && wNode.get("contents").isArray()) {
+            topicsArray = wNode.get("contents");
+        }
+        List<SectionTopic> topics = new ArrayList<>();
+        if (topicsArray != null) {
+            for (JsonNode tNode : topicsArray) {
+                String topicId = firstNonBlankText(tNode, "id", "topicId", "contentId");
+                String topicName = firstNonBlankText(tNode, "name", "title");
+                List<SectionMaterial> materials = new ArrayList<>();
+                if (tNode.has("materials") && tNode.get("materials").isArray()) {
+                    for (JsonNode mNode : tNode.get("materials")) {
+                        materials.add(SectionMaterial.builder()
+                                .id(firstNonBlankText(mNode, "id", "materialId", "contentId"))
+                                .title(firstNonBlankText(mNode, "title", "name"))
+                                .type(mNode.hasNonNull("type") ? mNode.path("type").asText() : null)
+                                .url(mNode.path("url").asText(null))
+                                .viewed(mNode.hasNonNull("viewed") ? mNode.get("viewed").asBoolean() : null)
+                                .build());
+                    }
+                } else {
+                    collectMaterialsFromContentNode(tNode, materials);
+                }
+                topics.add(SectionTopic.builder()
+                        .id(topicId)
+                        .name(topicName != null ? topicName.trim() : null)
+                        .materials(materials)
+                        .build());
+            }
+        }
+        return topics;
+    }
+
+    private void collectMaterialsFromContentNode(JsonNode cNode, List<SectionMaterial> target) {
+        if (cNode == null || cNode.isNull()) return;
+        String contentId = firstNonBlankText(cNode, "contentId", "id", "topicId");
+        String title = firstNonBlankText(cNode, "title", "name");
+        String rawType = cNode.hasNonNull("type") ? cNode.path("type").asText("").trim().toUpperCase(Locale.ROOT) : "";
+        JsonNode meta = cNode.path("metadata");
+
+        String directUrl = firstNonBlankText(cNode, "url");
+        if (directUrl == null && meta.isObject()) {
+            directUrl = firstNonBlankText(meta, "url");
+        }
+        String fileType = meta.isObject() ? firstNonBlankText(meta, "filetype", "fileType") : null;
+        String fileName = meta.isObject() ? firstNonBlankText(meta, "filename", "fileName") : null;
+        String effectiveTitle = title != null
+                ? (fileName != null && !fileName.equalsIgnoreCase(title) ? title + " (" + fileName + ")" : title)
+                : fileName;
+
+        if (directUrl != null) {
+            String effectiveType = (fileType != null && !fileType.isBlank())
+                    ? fileType.trim().toUpperCase(Locale.ROOT)
+                    : (rawType.isBlank() ? inferTypeFromUrl(directUrl) : rawType);
+            target.add(SectionMaterial.builder()
+                    .id(contentId)
+                    .title(effectiveTitle)
+                    .type(effectiveType)
+                    .url(directUrl)
+                    .viewed(cNode.hasNonNull("viewed") ? cNode.get("viewed").asBoolean() : null)
+                    .build());
+            return;
+        }
+
+        // Algunos contenidos HOMEWORK/FORUM adjuntan documentos S3 dentro de HTML `description`
+        if ("HOMEWORK".equals(rawType) || "FORUM".equals(rawType)) {
+            String descHtml = cNode.path("description").asText("");
+            List<TaskAttachment> htmlAtts = extractHtmlAttachments(descHtml);
+            for (TaskAttachment att : htmlAtts) {
+                target.add(SectionMaterial.builder()
+                        .id(att.getId())
+                        .title(att.getName() != null ? att.getName() : effectiveTitle)
+                        .type(att.getType())
+                        .url(att.getUrl())
+                        .viewed(null)
+                        .build());
+            }
+        }
+    }
+
+    private static String firstNonBlankText(JsonNode node, String... fieldNames) {
+        if (node == null || !node.isObject()) return null;
+        for (String f : fieldNames) {
+            if (node.hasNonNull(f)) {
+                String val = node.get(f).asText("");
+                if (!val.isBlank()) {
+                    return val;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static String inferTypeFromUrl(String url) {
+        if (url == null) return "LINK";
+        String lower = url.toLowerCase(Locale.ROOT);
+        if (lower.contains(".pdf")) return "PDF";
+        if (lower.contains(".docx") || lower.contains(".doc")) return "DOCX";
+        if (lower.contains(".pptx") || lower.contains(".ppt")) return "PPTX";
+        if (lower.contains(".xlsx") || lower.contains(".xls")) return "XLSX";
+        if (lower.contains(".txt") || lower.contains(".md")) return "TEXT";
+        return "URL";
     }
 
     @Override
@@ -1764,18 +1903,28 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
 
                 Integer attempts = data.hasNonNull("attempts") ? data.path("attempts").asInt() : 1;
 
-                List<TaskAttachment> attachments = new ArrayList<>();
+                Map<String, TaskAttachment> attachmentMap = new LinkedHashMap<>();
                 if (data.has("files") && data.path("files").isArray()) {
                     for (JsonNode f : data.path("files")) {
-                        attachments.add(TaskAttachment.builder()
+                        String fileUrl = f.path("url").asText(null);
+                        TaskAttachment att = TaskAttachment.builder()
                                 .id(f.path("id").asText(null))
                                 .name(f.hasNonNull("name") ? f.path("name").asText() : (f.hasNonNull("filename") ? f.path("filename").asText(null) : null))
-                                .url(f.path("url").asText(null))
-                                .type(f.path("type").asText(null))
+                                .url(fileUrl)
+                                .type(f.hasNonNull("type") ? f.path("type").asText() : inferTypeFromUrl(fileUrl))
                                 .size(f.hasNonNull("size") ? f.path("size").asLong() : null)
-                                .build());
+                                .build();
+                        String dedupeKey = (fileUrl != null && !fileUrl.isBlank()) ? fileUrl : String.valueOf(att.getName());
+                        attachmentMap.putIfAbsent(dedupeKey, att);
                     }
                 }
+                for (TaskAttachment htmlAtt : extractHtmlAttachments(rawContent)) {
+                    attachmentMap.putIfAbsent(htmlAtt.getUrl(), htmlAtt);
+                }
+                for (TaskAttachment htmlAtt : extractHtmlAttachments(rawDeliverables)) {
+                    attachmentMap.putIfAbsent(htmlAtt.getUrl(), htmlAtt);
+                }
+                List<TaskAttachment> attachments = new ArrayList<>(attachmentMap.values());
 
                 boolean rubricAvailable = !rubricCriterions.isEmpty();
 
@@ -1920,6 +2069,93 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         } catch (Exception e) {
             log.error("[UtpPortalGatewayAdapter] Excepción en fetchCalendarActivities: {}", e.getMessage());
             throw new UpstreamServiceException("Error de conexión al consultar actividades de calendario UTP: " + e.getMessage(), e);
+        }
+
+        return activities;
+    }
+
+    @Override
+    public List<AcademicActivity> fetchPendingActivitiesResume(String token) {
+        String effectiveToken = (token != null && token.startsWith("Bearer ")) ? token.substring(7).trim() : token;
+        if (effectiveToken == null || effectiveToken.isBlank()) {
+            throw new AuthenticationException("Se requiere token de sesión institucional UTP para consultar actividades pendientes.");
+        }
+        String userId = extractUserIdFromToken(effectiveToken);
+        String tenantId = extractTenantIdFromToken(effectiveToken);
+
+        String url = getPaoEndpoint("/course/student/activities/pending/resume?userId=" + userId);
+        log.info("[UtpPortalGatewayAdapter] Consultando resumen de actividades pendientes en: {}", url);
+        List<AcademicActivity> activities = new ArrayList<>();
+
+        try {
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(15))
+                    .header("accept", "*/*")
+                    .header("authorization", "Bearer " + effectiveToken)
+                    .header("user-id", userId)
+                    .header("user-role", "STUDENT")
+                    .header("x-tenant-id", tenantId)
+                    .header("transaction-id", java.util.UUID.randomUUID().toString())
+                    .header("origin", "https://class.utp.edu.pe")
+                    .header("referer", "https://class.utp.edu.pe/")
+                    .header("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                    .GET()
+                    .build();
+
+            HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() == 200) {
+                JsonNode root = objectMapper.readTree(resp.body());
+                if (root.has("errors")) {
+                    throw new UpstreamServiceException("UTP PAO devolvió errores al consultar actividades pendientes.");
+                }
+                JsonNode dataNode = root.path("data");
+                if (dataNode.isArray()) {
+                    for (JsonNode item : dataNode) {
+                        String title = item.path("activityTitle").asText("");
+                        String type = item.path("type").asText(null);
+                        String finishAt = item.path("finishAt").asText(null);
+                        boolean isQualified = item.path("isQualificated").asBoolean(false);
+                        String secId = item.path("sectionId").asText(null);
+                        String cName = item.path("courseName").asText(null);
+                        String cCode = resolveCourseCode(secId, null, effectiveToken);
+                        String status = item.hasNonNull("activityStatusFinal") ? item.path("activityStatusFinal").asText(null) : null;
+
+                        String category = calculateCategory(title, type, null, isQualified);
+                        UrgencyInfo urgencyInfo = calculateUrgency(finishAt);
+
+                        activities.add(AcademicActivity.builder()
+                                .id(item.path("contentId").asText(null))
+                                .title(title)
+                                .activityType(type)
+                                .weekNumber(item.hasNonNull("weekNumber") ? item.path("weekNumber").asInt() : null)
+                                .startAt(item.path("publishAt").asText(null))
+                                .finishAt(finishAt)
+                                .courseCode(cCode)
+                                .courseName(cName)
+                                .courseId(item.path("courseId").asText(null))
+                                .sectionId(secId)
+                                .contentId(item.path("contentId").asText(null))
+                                .activityId(item.path("activityId").asText(null))
+                                .studentStatus(status)
+                                .isQualified(isQualified)
+                                .classificationCategory(category)
+                                .urgency(urgencyInfo.urgency())
+                                .daysRemaining(urgencyInfo.daysRemaining())
+                                .build());
+                    }
+                }
+                log.info("[UtpPortalGatewayAdapter] pending/resume devolvió {} actividades", activities.size());
+            } else if (resp.statusCode() == 401 || resp.statusCode() == 403) {
+                throw new AuthenticationException("Sesión institucional UTP expirada o no autorizada en PAO (HTTP " + resp.statusCode() + ").");
+            } else {
+                throw new UpstreamServiceException("Error HTTP " + resp.statusCode() + " al consultar actividades pendientes UTP.");
+            }
+        } catch (AuthenticationException | ResourceNotFoundException | UpstreamServiceException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("[UtpPortalGatewayAdapter] Excepción en fetchPendingActivitiesResume: {}", e.getMessage());
+            throw new UpstreamServiceException("Error de conexión al consultar actividades pendientes UTP: " + e.getMessage(), e);
         }
 
         return activities;
@@ -2135,9 +2371,42 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
                 .build();
     }
 
+    private static final Pattern HTML_LINK_PATTERN = Pattern.compile(
+            "(?is)<a\\s+[^>]*href\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>(.*?)</a>");
+
+    private List<TaskAttachment> extractHtmlAttachments(String html) {
+        List<TaskAttachment> found = new ArrayList<>();
+        if (html == null || html.isBlank()) return found;
+        Matcher m = HTML_LINK_PATTERN.matcher(html);
+        while (m.find()) {
+            String url = m.group(1).trim();
+            if (!url.startsWith("http://") && !url.startsWith("https://")) continue;
+            String rawLabel = m.group(2).replaceAll("<[^>]+>", "").replace("&nbsp;", " ").trim();
+            String fileName = rawLabel;
+            if (fileName.isBlank()) {
+                int slash = url.lastIndexOf('/');
+                fileName = slash >= 0 && slash < url.length() - 1 ? url.substring(slash + 1) : url;
+            }
+            String stableId = "att-" + Integer.toUnsignedString(url.hashCode(), 16);
+            found.add(TaskAttachment.builder()
+                    .id(stableId)
+                    .name(fileName)
+                    .url(url)
+                    .type(inferTypeFromUrl(url))
+                    .size(null)
+                    .build());
+        }
+        return found;
+    }
+
     private String convertHtmlToMarkdown(String html) {
         if (html == null || html.isBlank()) return "";
-        return html
+        String withLinks = HTML_LINK_PATTERN.matcher(html).replaceAll(mr -> {
+            String href = mr.group(1).trim();
+            String label = mr.group(2).replaceAll("<[^>]+>", "").replace("&nbsp;", " ").trim();
+            return Matcher.quoteReplacement("[" + (label.isBlank() ? href : label) + "](" + href + ")");
+        });
+        return withLinks
                 .replaceAll("(?i)<h[1-6][^>]*>(.*?)</h[1-6]>", "\n### $1\n")
                 .replaceAll("(?i)<li[^>]*>(.*?)</li>", "- $1\n")
                 .replaceAll("(?i)<p[^>]*>", "\n")
