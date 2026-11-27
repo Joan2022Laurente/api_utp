@@ -710,7 +710,10 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
 
         // 2. GetCourseSummary → summary.relativeCycle (ciclo real) + summary.campus (fallback)
         try {
-            String enrichPeriod = resolveCurrentAcademicPeriod(accessToken).id();
+            AcademicPeriodInfo currentPeriod = resolveCurrentAcademicPeriod(accessToken);
+            String enrichPeriod = (currentPeriod.code() != null && !currentPeriod.code().isBlank())
+                    ? currentPeriod.code()
+                    : currentPeriod.id();
             String summaryQuery = "{\"operationName\":\"GetCourseSummary\",\"variables\":{\"periodId\":\"" + enrichPeriod + "\"}," +
                     "\"query\":\"query GetCourseSummary($periodId: String!) { getCourseSummary(periodId: $periodId) { summary { campus relativeCycle } } }\"}";
 
@@ -1970,9 +1973,12 @@ public class UtpPortalGatewayAdapter implements UtpPortalGatewayPort {
         if (studentCode == null || studentCode.isBlank()) {
             throw new AuthenticationException("Token de autenticación no contiene código de estudiante válido");
         }
-        String effectivePeriod = (periodId != null && !periodId.isBlank())
-                ? resolveAcademicPeriod(effectiveToken, periodId.trim()).id()
-                : resolveCurrentAcademicPeriod(effectiveToken).id();
+        AcademicPeriodInfo periodInfo = (periodId != null && !periodId.isBlank())
+                ? resolveAcademicPeriod(effectiveToken, periodId.trim())
+                : resolveCurrentAcademicPeriod(effectiveToken);
+        String effectivePeriod = (periodInfo.code() != null && !periodInfo.code().isBlank())
+                ? periodInfo.code()
+                : periodInfo.id();
 
         String url = getPortalEndpoint();
         log.info("[UtpPortalGatewayAdapter] Consultando GetCourseSummary en Portal GraphQL para periodo: {}", effectivePeriod);
